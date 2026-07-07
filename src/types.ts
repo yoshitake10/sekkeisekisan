@@ -173,6 +173,8 @@ export interface QuantityItem {
   /** 引当てた UnitPrice.id */
   unitPriceRef?: string
   source: QuantitySource
+  /** source='takeoff' のとき転記元図面ID（再転記時の置換に使用） */
+  drawingId?: string
   remarks?: string
 }
 
@@ -208,6 +210,8 @@ export interface Measurement {
   color: string
   /** 規格・メモ */
   spec?: string
+  /** ユーザーが数量を手修正した場合 true（スケール再計算で上書きしない） */
+  valueOverridden?: boolean
 }
 
 export interface DrawingMeta {
@@ -217,11 +221,17 @@ export interface DrawingMeta {
   /**
    * スケール: 図面上の1単位が実寸何mか。
    * PDF: 1描画ピクセル(scale=1) → m。未設定は undefined。
-   * DXF: 1図面単位 → m（mm図面なら 0.001）。
+   *      複数ページPDFは scaleByPage を優先し、この値は pageIndex の
+   *      ページで設定された旧データ互換値として扱う。
+   * DXF: 1図面単位 → m（mm図面なら 0.001）。図面全体で1つ。
    */
   scaleMPerUnit?: number
   /** スケール設定対象ページ（PDFのみ複数ページ想定） */
   pageIndex?: number
+  /** PDF: ページ番号(0始まり)ごとのスケール。縮尺の異なるページ混在に対応 */
+  scaleByPage?: Record<number, number>
+  /** 再関連付け時の同一性確認用ファイルサイズ（bytes） */
+  fileSize?: number
 }
 
 // ---------- 見積 ----------

@@ -26,7 +26,7 @@ const TOOLS: TakeoffTool[] = ['pan', 'scale', 'count', 'length', 'area']
 const HINTS: Record<TakeoffTool, string> = {
   pan: 'ドラッグ: 画面移動 ／ ホイール: 拡大縮小 ／ クリック: 測定を選択',
   scale: '基準となる2点をクリック → 実寸距離[m]を入力（図面単位が不明・怪しい場合の補正用） ／ Esc: 中止',
-  count: 'クリックで1点ずつ追加 → ダブルクリック か「確定」で保存 ／ Esc: 取消（ホイール: 拡大縮小）',
+  count: 'クリックで1点ずつ追加 → ダブルクリック か「確定」で保存（ダブルクリック位置は数えない） ／ Esc: 取消（ホイール: 拡大縮小）',
   length: 'クリックで頂点を追加（線分端点に自動スナップ）→ ダブルクリックで確定 ／ Esc: 取消',
   area: 'クリックで多角形の頂点を追加 → ダブルクリックで確定 ／ Esc: 取消',
 }
@@ -336,11 +336,11 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
     if (tool !== 'scale') setScaleDraft(null)
   }, [tool])
 
-  // --- スケール変更時に既存の長さ/面積測定を再計算 ---
+  // --- スケール変更時に既存の長さ/面積測定を再計算（手修正済みの数量は上書きしない） ---
   const rescaleMeasurements = useCallback(
     (newScale: number) => {
       for (const m of measurements) {
-        if (m.kind === 'count' || m.points.length === 0) continue
+        if (m.kind === 'count' || m.points.length === 0 || m.valueOverridden) continue
         updateMeasurement(m.id, { value: measurementValue(m.kind, m.points, newScale) })
       }
     },
@@ -447,6 +447,7 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
 
   function onClick(e: React.MouseEvent) {
     if (downRef.current?.moved) return
+    if (e.detail > 1) return // ダブルクリックの2回目の click は無視（点の重複追加を防ぐ）
     if (!wrapRef.current || !scene) return
     const { sx, sy } = eventPos(e)
     if (tool === 'pan') {
@@ -467,9 +468,19 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
   function onDoubleClick() {
     if (downRef.current?.moved) return
     if (!kind || !scene) return
-    // ダブルクリックは直前に click が2回発火して同一点が重複追加されるため、末尾1点を除いて確定
-    const pts = pending.length >= 2 ? pending.slice(0, -1) : pending
-    commitPending(pts)
+    // click 側で e.detail > 1 を無視しているため、ダブルクリック位置は pending に1点だけ入っている
+    if (kind === 'count') {
+      // 個数カウントのダブルクリックは確定操作。ダブルクリック位置（末尾1点）は個数に含めない
+      const pts = pending.slice(0, -1)
+      if (pts.length === 0) {
+        setPending([])
+        return
+      }
+      commitPending(pts)
+    } else {
+      // length / area はダブルクリック位置を最終頂点として確定
+      commitPending()
+    }
   }
 
   /** pan ツールのクリックで測定を選択（頂点近傍 10px） */

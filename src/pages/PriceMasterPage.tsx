@@ -93,18 +93,29 @@ export default function PriceMasterPage() {
   }
 
   function handleImportSubmit(records: Record<string, string | number>[], mode: string) {
-    const rows: UnitPrice[] = records.map((r) => {
+    const rows: UnitPrice[] = []
+    let skipped = 0
+    for (const r of records) {
       const price = parseNumber(r.unitPrice)
-      return {
+      // 「別途」「時価」等、単価が数値でない行は 0円で登録せずスキップ
+      if (!Number.isFinite(price)) {
+        skipped++
+        continue
+      }
+      rows.push({
         id: genId('up'),
         category: String(r.category).trim() || 'その他',
         name: String(r.name).trim(),
         spec: String(r.spec).trim(),
         unit: String(r.unit).trim() || '式',
-        unitPriceYen: Number.isFinite(price) ? price : 0,
+        unitPriceYen: price,
         source: String(r.source).trim() || undefined,
-      }
-    })
+      })
+    }
+    if (rows.length === 0) {
+      alert(`取り込める行がありません。${skipped}件は単価が数値でないため取込みませんでした。`)
+      return
+    }
     if (mode === 'replace') {
       if (!confirm(`既存の単価マスタ ${unitPrices.length}件 を削除して ${rows.length}件 に置き換えます。よろしいですか？`)) {
         return
@@ -115,9 +126,10 @@ export default function PriceMasterPage() {
     }
     setImportSheets(null)
     alert(
-      mode === 'replace'
+      (mode === 'replace'
         ? `単価マスタを ${rows.length}件 に置き換えました。`
-        : `単価マスタに ${rows.length}件 を追加しました。`,
+        : `単価マスタに ${rows.length}件 を追加しました。`) +
+        (skipped > 0 ? `\n${skipped}件は単価が数値でないため取込みませんでした。` : ''),
     )
   }
 
@@ -223,27 +235,23 @@ export default function PriceMasterPage() {
               {filtered.map((u) => (
                 <tr key={u.id}>
                   <td>
-                    <input
-                      type="text"
-                      list="price-master-category-options"
+                    {/* 名称・規格・分類はコミット式（blur / Enter 確定）。
+                        検索絞込中に1文字目で行がリストから消えるのを防ぐ */}
+                    <CommitTextInput
                       value={u.category}
-                      onChange={(e) => upd(u, { category: e.target.value })}
+                      list="price-master-category-options"
+                      onCommit={(v) => upd(u, { category: v })}
                     />
                   </td>
                   <td>
-                    <input
-                      type="text"
+                    <CommitTextInput
                       value={u.name}
                       placeholder="名称"
-                      onChange={(e) => upd(u, { name: e.target.value })}
+                      onCommit={(v) => upd(u, { name: v })}
                     />
                   </td>
                   <td>
-                    <input
-                      type="text"
-                      value={u.spec}
-                      onChange={(e) => upd(u, { spec: e.target.value })}
-                    />
+                    <CommitTextInput value={u.spec} onCommit={(v) => upd(u, { spec: v })} />
                   </td>
                   <td>
                     <input
@@ -254,12 +262,21 @@ export default function PriceMasterPage() {
                   </td>
                   <td className="num">
                     <input
+                      key={u.unitPriceYen}
                       type="number"
                       className="num"
-                      value={u.unitPriceYen}
-                      onChange={(e) => {
+                      defaultValue={u.unitPriceYen}
+                      onBlur={(e) => {
                         const v = parseNumber(e.target.value)
-                        upd(u, { unitPriceYen: Number.isFinite(v) ? v : 0 })
+                        // 空・非数値なら更新しない（クリアで0円が即保存されるのを防ぐ）
+                        if (e.target.value.trim() === '' || !Number.isFinite(v)) {
+                          e.target.value = String(u.unitPriceYen)
+                          return
+                        }
+                        if (v !== u.unitPriceYen) upd(u, { unitPriceYen: v })
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
                       }}
                     />
                   </td>
@@ -325,5 +342,34 @@ export default function PriceMasterPage() {
         />
       )}
     </div>
+  )
+}
+
+// ------------------------------------------------------------
+// コミット式テキスト入力（編集中はローカル、blur / Enter で確定）
+// ------------------------------------------------------------
+
+function CommitTextInput(props: {
+  value: string
+  onCommit: (v: string) => void
+  placeholder?: string
+  list?: string
+}) {
+  const { value, onCommit, placeholder, list } = props
+  return (
+    <input
+      key={value}
+      type="text"
+      list={list}
+      defaultValue={value}
+      placeholder={placeholder}
+      onBlur={(e) => {
+        if (e.target.value !== value) onCommit(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        // IME 変換確定の Enter では確定しない
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur()
+      }}
+    />
   )
 }

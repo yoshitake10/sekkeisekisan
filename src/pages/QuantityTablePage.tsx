@@ -16,6 +16,7 @@ import { downloadXlsx, readWorkbook } from '../io/excel'
 import type { SheetData } from '../io/excel'
 import ImportMappingDialog from '../io/ImportMappingDialog'
 import type { ImportField } from '../io/ImportMappingDialog'
+import { itemAmountYen } from '../logic/estimate'
 
 const UNCATEGORIZED = '（未分類）'
 
@@ -36,11 +37,19 @@ const IMPORT_FIELDS: ImportField[] = [
   { key: 'remarks', label: '備考', aliases: ['注記', 'メモ', '備 考'] },
 ]
 
-/** 行の金額（単価未設定は undefined） */
+/** 行の金額（単価未設定は undefined）。見積書と同じ行ごと四捨五入（itemAmountYen）に統一 */
 function amountOf(q: QuantityItem): number | undefined {
   return q.unitPriceYen === undefined || q.unitPriceYen === null
     ? undefined
-    : q.quantity * q.unitPriceYen
+    : itemAmountYen(q)
+}
+
+/** 引当マッチ用の正規化（全角英数記号→半角・小文字化・空白除去） */
+function normMatch(s: string): string {
+  return s
+    .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/\s+/g, '')
+    .toLowerCase()
 }
 
 export default function QuantityTablePage() {
@@ -171,28 +180,44 @@ export default function QuantityTablePage() {
       alert('単価未設定の行はありません。')
       return
     }
+    // 単価0円以下のマスタ行は誤引当防止のため自動引当の対象外
+    const masters = unitPrices
+      .filter((u) => u.unitPriceYen > 0)
+      .map((u) => ({ u, name: normMatch(u.name), spec: normMatch(u.spec) }))
+      .filter((x) => x.name !== '')
     let hit = 0
+    let specSkipped = 0
     for (const q of targets) {
-      const name = q.name.trim()
-      const spec = q.spec.trim()
+      const name = normMatch(q.name)
+      const spec = normMatch(q.spec)
       if (name === '') continue
-      // 1) 名称＋規格 完全一致 → 2) 名称 完全一致 → 3) 名称 部分一致（双方向）
-      let m = unitPrices.find((u) => u.name.trim() === name && u.spec.trim() === spec)
-      if (!m) m = unitPrices.find((u) => u.name.trim() === name)
-      if (!m)
-        m = unitPrices.find((u) => {
-          const un = u.name.trim()
-          return un !== '' && (un.includes(name) || name.includes(un))
-        })
+      /** 名称の片方向部分一致（短い方が3文字以上のときのみ） */
+      const nameLoose = (x: { name: string }) => {
+        const shorter = x.name.length <= name.length ? x.name : name
+        const longer = x.name.length <= name.length ? name : x.name
+        return shorter.length >= 3 && longer.includes(shorter)
+      }
+      // 1) 名称＋規格 完全一致（規格は両方空も一致扱い）
+      let m = masters.find((x) => x.name === name && x.spec === spec)
+      // 2) 名称の片方向部分一致。規格は両方空 or 一致のときのみ
+      //    （規格が両方入っていて不一致なら引当てない）
+      if (!m) m = masters.find((x) => x.spec === spec && nameLoose(x))
       if (m) {
-        updateQuantityItem(q.id, { unitPriceYen: m.unitPriceYen, unitPriceRef: m.id })
+        updateQuantityItem(q.id, { unitPriceYen: m.u.unitPriceYen, unitPriceRef: m.u.id })
         hit++
+      } else if (masters.some((x) => x.name === name || nameLoose(x))) {
+        // 名称は一致するが規格不一致のため見送り
+        specSkipped++
       }
     }
+    const missed = targets.length - hit
     alert(
       `単価マスタから ${hit}件を引当てました。` +
-        (targets.length - hit > 0
-          ? `\n${targets.length - hit}件は該当する単価が見つかりませんでした（名称・規格を確認してください）。`
+        (missed > 0
+          ? `\n${missed}件は該当する単価が見つかりませんでした（名称・規格を確認してください）。`
+          : '') +
+        (specSkipped > 0
+          ? `\nうち ${specSkipped}件は名称が一致するものの規格不一致のため引当てを見送りました。`
           : ''),
     )
   }
@@ -372,11 +397,12 @@ function GroupRows(props: {
       {rows.map((q) => (
         <tr key={q.id}>
           <td>
-            <input
-              type="text"
-              list="quantity-category-options"
+            {/* 分類は1文字入力ごとに行が別グループへ再マウントされフォーカスが
+                失われるため、確定（blur / Enter）時のみストアへ反映する */}
+            <CommitTextInput
               value={q.category}
-              onChange={(e) => onUpdate(q.id, { category: e.target.value })}
+              list="quantity-category-options"
+              onCommit={(v) => onUpdate(q.id, { category: v })}
             />
           </td>
           <td>
@@ -449,5 +475,34 @@ function GroupRows(props: {
         <td colSpan={3} style={{ background: '#f2f5f8' }}></td>
       </tr>
     </>
+  )
+}
+
+// ------------------------------------------------------------
+// コミット式テキスト入力（編集中はローカル、blur / Enter で確定）
+// ------------------------------------------------------------
+
+function CommitTextInput(props: {
+  value: string
+  onCommit: (v: string) => void
+  placeholder?: string
+  list?: string
+}) {
+  const { value, onCommit, placeholder, list } = props
+  return (
+    <input
+      key={value}
+      type="text"
+      list={list}
+      defaultValue={value}
+      placeholder={placeholder}
+      onBlur={(e) => {
+        if (e.target.value !== value) onCommit(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        // IME 変換確定の Enter では確定しない
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.currentTarget.blur()
+      }}
+    />
   )
 }

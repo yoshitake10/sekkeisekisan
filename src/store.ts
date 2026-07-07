@@ -111,18 +111,24 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined
 function persist(state: AppState) {
   clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
+    const s = useStore.getState()
     const shape: PersistShape = {
-      projects: state.projects,
-      activeProjectId: state.activeProjectId,
-      daikinModels: state.daikinModels,
-      loadUnits: state.loadUnits,
-      roughCosts: state.roughCosts,
-      unitPrices: state.unitPrices,
+      projects: s.projects,
+      activeProjectId: s.activeProjectId,
+      daikinModels: s.daikinModels,
+      loadUnits: s.loadUnits,
+      roughCosts: s.roughCosts,
+      unitPrices: s.unitPrices,
     }
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(shape))
+      if (s.saveError) useStore.setState({ saveError: null })
     } catch (e) {
       console.error('保存に失敗しました', e)
+      useStore.setState({
+        saveError:
+          '自動保存に失敗しました（ブラウザの保存容量不足の可能性）。プロジェクトページのJSON書出しで控えを保存してください。',
+      })
     }
   }, 400)
 }
@@ -138,6 +144,8 @@ export interface AppState {
   loadUnits: LoadUnit[]
   roughCosts: RoughCostUnit[]
   unitPrices: UnitPrice[]
+  /** localStorage 保存失敗時のメッセージ（App でバナー表示） */
+  saveError: string | null
 
   // --- プロジェクト ---
   addProject: (name: string) => void
@@ -177,6 +185,8 @@ export interface AppState {
   resetDaikinModels: () => void
   setLoadUnits: (rows: LoadUnit[]) => void
   setRoughCosts: (rows: RoughCostUnit[]) => void
+  /** 用途名の変更。全プロジェクトの部屋・主用途の参照も追従させる */
+  renameLoadUsage: (oldUsage: string, newUsage: string) => void
 }
 
 /** アクティブプロジェクトを取得するセレクタ */
@@ -217,6 +227,7 @@ export const useStore = create<AppState>((set, get) => {
 
   return {
     ...initial,
+    saveError: null,
 
     addProject: (name) => {
       const p = createProject(name || '新規プロジェクト')
@@ -309,8 +320,56 @@ export const useStore = create<AppState>((set, get) => {
 
     setLoadUnits: (rows) => setAndPersist({ loadUnits: rows }),
     setRoughCosts: (rows) => setAndPersist({ roughCosts: rows }),
+
+    renameLoadUsage: (oldUsage, newUsage) => {
+      if (oldUsage === newUsage) return
+      const s = get()
+      setAndPersist({
+        loadUnits: s.loadUnits.map((u) =>
+          u.usage === oldUsage ? { ...u, usage: newUsage } : u,
+        ),
+        projects: s.projects.map((p) => ({
+          ...p,
+          buildingUsage: p.buildingUsage === oldUsage ? newUsage : p.buildingUsage,
+          rooms: p.rooms.map((r) => (r.usage === oldUsage ? { ...r, usage: newUsage } : r)),
+        })),
+      })
+    },
   }
 })
+
+// ============================================================
+// 他タブとの同期:
+// 別タブが localStorage に保存した内容をこのタブにも反映する。
+// （storage イベントは書き込んだタブ以外で発火する）
+// これが無いと、2タブ同時利用時に古い状態のタブの自動保存が
+// もう一方のタブの編集を丸ごと上書きしてしまう。
+// ============================================================
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== LS_KEY || !e.newValue) return
+    try {
+      const data = JSON.parse(e.newValue) as PersistShape
+      if (!data.projects || data.projects.length === 0) return
+      if (!data.projects.find((p) => p.id === data.activeProjectId)) {
+        data.activeProjectId = data.projects[0].id
+      }
+      // 自タブの activeProjectId は維持する（閲覧中の案件が突然切り替わらないように）
+      const cur = useStore.getState().activeProjectId
+      const keepActive = data.projects.some((p) => p.id === cur)
+      useStore.setState({
+        projects: data.projects,
+        activeProjectId: keepActive ? cur : data.activeProjectId,
+        daikinModels: data.daikinModels,
+        loadUnits: data.loadUnits,
+        roughCosts: data.roughCosts,
+        unitPrices: data.unitPrices,
+      })
+    } catch {
+      // 破損データは無視（自タブの状態を保持）
+    }
+  })
+}
 
 /** アクティブプロジェクトを返すフック */
 export function useActiveProject(): Project {

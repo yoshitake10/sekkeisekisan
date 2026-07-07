@@ -49,7 +49,21 @@ export default function TakeoffPage() {
       }
       // 同名・同種の既存図面があれば同じ drawingId に再関連付け（測定が復元される）
       const existing = drawings.find((d) => d.fileName === f.name && d.kind === kind)
-      const meta: DrawingMeta = existing ?? { id: genId('dwg'), kind, fileName: f.name }
+      let meta: DrawingMeta
+      if (existing) {
+        if (existing.fileSize !== undefined && existing.fileSize !== f.size) {
+          const relink = confirm(
+            `「${f.name}」は同名ですがファイルサイズが異なります。図面が改訂されている場合、保存済みのスケール・測定が図面と合わない可能性があります。既存の測定に関連付けますか？\n（キャンセルすると新規図面として登録します）`,
+          )
+          meta = relink
+            ? { ...existing, fileSize: f.size }
+            : { id: genId('dwg'), kind, fileName: f.name, fileSize: f.size }
+        } else {
+          meta = { ...existing, fileSize: f.size }
+        }
+      } else {
+        meta = { id: genId('dwg'), kind, fileName: f.name, fileSize: f.size }
+      }
       drawingFiles.set(meta.id, f)
       upsertDrawing(meta)
       lastId = meta.id

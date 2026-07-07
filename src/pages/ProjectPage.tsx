@@ -13,8 +13,9 @@ export default function ProjectPage() {
 
   const totalQty = project.quantityItems.length
   const roomArea = project.rooms.reduce((a, r) => a + (r.areaM2 || 0), 0)
+  // 見積計算(logic/estimate.ts)と同じ「行ごと四捨五入」で合算する
   const qtyAmount = project.quantityItems.reduce(
-    (a, q) => a + (q.unitPriceYen ?? 0) * (q.quantity || 0),
+    (a, q) => a + Math.round((q.unitPriceYen ?? 0) * (q.quantity || 0)),
     0,
   )
 

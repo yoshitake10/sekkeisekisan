@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { useActiveProject, useStore } from '../store'
-import type { MeasureKind, Measurement, TakeoffPoint } from '../types'
+import type { DrawingMeta, MeasureKind, Measurement, TakeoffPoint } from '../types'
 import { genId } from '../utils/id'
 import { num, parseNumber } from '../utils/format'
 import { colorForIndex, dist, measurementValue, polygonArea, polylineLength } from './geometry'
@@ -25,7 +25,7 @@ const TOOL_HINTS: Record<TakeoffTool, string> = {
   scale:
     '既知の寸法（通り芯間・スケールバー等）の両端2点をクリック → 実寸(m)を入力 ／ Esc: 中止 ／ 中ボタンドラッグ: 移動',
   count:
-    'クリック: マーカー追加 ／ ダブルクリック or「確定」ボタン: 保存 ／ 右クリック: 1つ戻す ／ Esc: 中止',
+    'クリック: マーカー追加 ／ ダブルクリック or「確定」ボタン: 保存（ダブルクリックの位置はカウントに含めません） ／ 右クリック: 1つ戻す ／ Esc: 中止',
   length:
     'クリック: 頂点追加 ／ ダブルクリック: 確定 ／ 右クリック: 1つ戻す ／ Esc: 中止 ／ 中ボタンドラッグ: 移動',
   area: 'クリック: 頂点追加 ／ ダブルクリック: 閉じて確定 ／ 右クリック: 1つ戻す ／ Esc: 中止 ／ 中ボタンドラッグ: 移動',
@@ -39,6 +39,18 @@ const TOOL_KIND: Partial<Record<TakeoffTool, MeasureKind>> = {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
+}
+
+/**
+ * 指定ページに適用するスケール（m/描画ピクセル）。
+ * scaleByPage を優先。旧データ互換: scaleByPage が無い場合は
+ * スケール設定時のページ（pageIndex ?? 0）に限り scaleMPerUnit を有効とし、
+ * 別縮尺のページへ黙って旧スケールが適用されるのを防ぐ。
+ */
+function scaleForPage(meta: DrawingMeta | undefined, pageIndex: number): number | undefined {
+  if (!meta) return undefined
+  if (meta.scaleByPage) return meta.scaleByPage[pageIndex]
+  return pageIndex === (meta.pageIndex ?? 0) ? meta.scaleMPerUnit : undefined
 }
 
 function distToSegment(px: number, py: number, a: TakeoffPoint, b: TakeoffPoint): number {
@@ -90,9 +102,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const project = useActiveProject()
   const upsertDrawing = useStore((s) => s.upsertDrawing)
   const addMeasurement = useStore((s) => s.addMeasurement)
+  const updateMeasurement = useStore((s) => s.updateMeasurement)
 
   const meta = project.drawings.find((d) => d.id === drawingId)
-  const scale = meta?.scaleMPerUnit
 
   // --- PDF ドキュメント / ページ ---
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
@@ -101,6 +113,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const [page, setPage] = useState<PDFPageProxy | null>(null)
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 })
   const [error, setError] = useState('')
+
+  /** 現在ページのスケール（ページごとに管理） */
+  const scale = scaleForPage(meta, pageIndex)
 
   // --- 表示（ズーム・パン・キャンバスサイズ） ---
   const [zoom, setZoom] = useState(1)
@@ -443,7 +458,7 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   function selectTool(t: TakeoffTool) {
     if ((t === 'length' || t === 'area') && !scale) {
       alert(
-        'スケールが未設定です。\n長さ・面積を拾う前に「スケール設定」ツールで既知の寸法（通り芯間など）から基準を設定してください。',
+        'このページのスケールが未設定です。\n長さ・面積を拾う前に「スケール設定」ツールで既知の寸法（通り芯間など）から基準を設定してください。\n（スケールはページごとに設定します）',
       )
     }
     setTool(t)
@@ -487,7 +502,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   // ---------- 測定の確定 ----------
   function saveMeasurement(kind: MeasureKind, points: TakeoffPoint[]) {
     if ((kind === 'length' || kind === 'area') && !scale) {
-      alert('スケールが未設定のため確定できません。「スケール設定」で基準寸法を設定してください。')
+      alert(
+        'このページのスケールが未設定のため確定できません。「スケール設定」で基準寸法を設定してください。',
+      )
       return
     }
     const label = target.label.trim() || TOOL_LABELS[tool]
@@ -603,8 +620,29 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         alert('正の数値（m）を入力してください。')
         return
       }
+      const newScale = realM / units
       const base = meta ?? { id: drawingId, kind: 'pdf' as const, fileName: file.name }
-      upsertDrawing({ ...base, scaleMPerUnit: realM / units, pageIndex })
+      // ページ単位でスケールを保持。旧データの scaleMPerUnit は設定時ページの値として引き継ぐ
+      const scaleByPage: Record<number, number> = {
+        ...(meta?.scaleByPage ??
+          (meta?.scaleMPerUnit !== undefined
+            ? { [meta.pageIndex ?? 0]: meta.scaleMPerUnit }
+            : {})),
+        [pageIndex]: newScale,
+      }
+      upsertDrawing({ ...base, scaleMPerUnit: newScale, pageIndex, scaleByPage })
+      // このページの既存測定を新スケールで再計算（数量を手修正した測定は除く）
+      for (const m of project.measurements) {
+        if (
+          m.drawingId !== drawingId ||
+          m.pageIndex !== pageIndex ||
+          m.kind === 'count' ||
+          m.points.length === 0 ||
+          m.valueOverridden === true
+        )
+          continue
+        updateMeasurement(m.id, { value: measurementValue(m.kind, m.points, newScale) })
+      }
       return
     }
     // count / length / area
@@ -612,6 +650,18 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   }
   function onDoubleClick(e: React.MouseEvent) {
     e.preventDefault()
+    if (tool === 'count') {
+      // ダブルクリックの1回目の click で draft に点が追加されているため、
+      // 末尾1点（ダブルクリック位置）を除いて確定する（+1 防止）
+      const pts = draft.slice(0, -1)
+      if (pts.length === 0) {
+        setDraft([])
+        setCursor(null)
+        return
+      }
+      saveMeasurement('count', pts)
+      return
+    }
     finalizeDraft()
   }
   function onContextMenu(e: React.MouseEvent) {
@@ -753,11 +803,13 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         />
         <span className="spacer" />
         {scale ? (
-          <span className="badge green" title={`1図面単位 = ${scale} m`}>
-            スケール設定済（100px ≒ {num(scale * 100, 2)} m）
+          <span className="badge green" title={`1図面単位 = ${scale} m（ページごとに設定）`}>
+            {numPages > 1 ? `P${pageIndex + 1}: ` : ''}スケール設定済（100px ≒ {num(scale * 100, 2)} m）
           </span>
         ) : (
-          <span className="badge orange">スケール未設定 — 長さ・面積は拾えません</span>
+          <span className="badge orange">
+            {numPages > 1 ? `P${pageIndex + 1}: ` : ''}スケール未設定 — 長さ・面積は拾えません
+          </span>
         )}
       </div>
 

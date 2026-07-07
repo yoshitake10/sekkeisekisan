@@ -50,16 +50,25 @@ export default function EquipmentSelectionPage() {
   /** 行ごとの実際に使う機種（手動選択があれば優先） */
   function effectiveModels(room: Room, i: number) {
     const calc = calcs[i]
-    const acModel =
-      models.find((m) => m.id === room.selectedModelId) ?? calc.recommendedModel
+    // 手動選択がDBから削除済み等で解決できない場合は推奨扱いに戻す
+    const manualAcModel = models.find((m) => m.id === room.selectedModelId)
+    const acModel = manualAcModel ?? calc.recommendedModel
+    const manualVentModel = models.find((m) => m.id === room.selectedVentModelId)
     const ventModel = room.useErv
-      ? models.find((m) => m.id === room.selectedVentModelId) ?? calc.recommendedVentModel
+      ? manualVentModel ?? calc.recommendedVentModel
       : undefined
     const ventCount =
       ventModel && calc.requiredVentilationM3h > 0
         ? ventUnitCount(calc.requiredVentilationM3h, ventModel)
         : 0
-    return { calc, acModel, ventModel, ventCount }
+    return {
+      calc,
+      acModel,
+      ventModel,
+      ventCount,
+      acManual: manualAcModel !== undefined,
+      ventManual: manualVentModel !== undefined,
+    }
   }
 
   // 合計KPI
@@ -67,30 +76,42 @@ export default function EquipmentSelectionPage() {
     let area = 0
     let kw = 0
     let acUnits = 0
+    let acPendingRooms = 0
     let ventUnits = 0
     rooms.forEach((r, i) => {
       const calc = calcs[i]
       area += r.areaM2
       kw += calc.requiredCoolingKw
-      if (calc.requiredCoolingKw > 0) acUnits += calc.unitCount
+      if (calc.requiredCoolingKw > 0) {
+        const acModel =
+          models.find((m) => m.id === r.selectedModelId) ?? calc.recommendedModel
+        // 機種確定済みの部屋のみ台数に加算（未確定は室数として別掲）
+        if (acModel) acUnits += calc.unitCount
+        else acPendingRooms += 1
+      }
       if (r.useErv && calc.requiredVentilationM3h > 0) {
         const ventModel =
           models.find((m) => m.id === r.selectedVentModelId) ?? calc.recommendedVentModel
         if (ventModel) ventUnits += ventUnitCount(calc.requiredVentilationM3h, ventModel)
       }
     })
-    return { area, kw, acUnits, ventUnits }
+    return { area, kw, acUnits, acPendingRooms, ventUnits }
   }, [rooms, calcs, models])
 
   /** 数量表へ転記 */
   function transferToQuantity() {
-    const items = roomsToQuantityItems(rooms, loadUnits, models)
+    const { items, skippedRooms } = roomsToQuantityItems(rooms, loadUnits, models)
     removeQuantityBySource('equipment')
     addQuantityItems(items)
-    alert(
+    let msg =
       `機器選定の結果 ${items.length} 件を数量表へ転記しました。\n` +
-        '（数量表にあった機器選定由来の行は置き換えられています）',
-    )
+      '（数量表にあった機器選定由来の行は置き換えられています）'
+    if (skippedRooms.length > 0) {
+      msg +=
+        '\n\n以下の部屋は機種未確定のため転記されていません: ' +
+        skippedRooms.join('、')
+    }
+    alert(msg)
   }
 
   /** 数値入力の共通処理（空欄は undefined、数値化できなければ変更しない） */
@@ -126,7 +147,10 @@ export default function EquipmentSelectionPage() {
         </div>
         <div className="kpi-item">
           <div className="v">{num(totals.acUnits)} 台</div>
-          <div className="k">室内機台数</div>
+          <div className="k">
+            室内機台数（機種確定分）
+            {totals.acPendingRooms > 0 ? `・未確定${totals.acPendingRooms}室` : ''}
+          </div>
         </div>
         <div className="kpi-item">
           <div className="v">{num(totals.ventUnits)} 台</div>
@@ -176,7 +200,8 @@ export default function EquipmentSelectionPage() {
                 </tr>
               )}
               {rooms.map((r, i) => {
-                const { calc, acModel, ventModel, ventCount } = effectiveModels(r, i)
+                const { calc, acModel, ventModel, ventCount, acManual, ventManual } =
+                  effectiveModels(r, i)
                 const lu = loadUnits.find((u) => u.usage === r.usage)
                 const density = lu?.occupantDensityM2PerPerson ?? 10
                 const autoOccupants = density > 0 ? Math.ceil(r.areaM2 / density) : 0
@@ -291,10 +316,13 @@ export default function EquipmentSelectionPage() {
                         type="number"
                         className="num"
                         min={0}
+                        step={1}
                         value={r.unitCount}
                         title="0 の場合は自動（1台あたり最大14kW目安で分割）"
                         onChange={(e) =>
-                          updateRoom(r.id, { unitCount: numPatch(e.target.value) ?? 0 })
+                          updateRoom(r.id, {
+                            unitCount: Math.max(0, Math.round(numPatch(e.target.value) ?? 0)),
+                          })
                         }
                       />
                     </td>
@@ -308,7 +336,7 @@ export default function EquipmentSelectionPage() {
                       {acModel ? (
                         <div>
                           {acModel.modelNo}（{acModel.hpClass ?? `${num(acModel.coolingKw ?? 0, 1)}kW`}）{' '}
-                          {r.selectedModelId ? (
+                          {acManual ? (
                             <span className="badge orange">手動</span>
                           ) : (
                             <span className="badge blue">推奨</span>
@@ -319,7 +347,7 @@ export default function EquipmentSelectionPage() {
                         <div className="danger-text">該当機種なし</div>
                       )}
                       <select
-                        value={r.selectedModelId ?? ''}
+                        value={acManual ? r.selectedModelId ?? '' : ''}
                         onChange={(e) =>
                           updateRoom(r.id, { selectedModelId: e.target.value || undefined })
                         }
@@ -353,7 +381,7 @@ export default function EquipmentSelectionPage() {
                           {ventModel ? (
                             <div>
                               {ventModel.modelNo} × {ventCount}台{' '}
-                              {r.selectedVentModelId ? (
+                              {ventManual ? (
                                 <span className="badge orange">手動</span>
                               ) : (
                                 <span className="badge blue">推奨</span>
@@ -363,7 +391,7 @@ export default function EquipmentSelectionPage() {
                             <div className="muted">—</div>
                           )}
                           <select
-                            value={r.selectedVentModelId ?? ''}
+                            value={ventManual ? r.selectedVentModelId ?? '' : ''}
                             onChange={(e) =>
                               updateRoom(r.id, {
                                 selectedVentModelId: e.target.value || undefined,

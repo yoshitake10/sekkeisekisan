@@ -41,8 +41,30 @@ async function readCsvText(file: File): Promise<string> {
 }
 
 /**
+ * 結合セルの展開: 結合範囲の左上セルの値を範囲内の全セルへコピーする。
+ * （sheet_to_json は結合範囲の左上以外を空セルとして返すため）
+ */
+function expandMerges(ws: XLSX.WorkSheet, rows: (string | number)[][]): void {
+  const merges = ws['!merges']
+  if (!merges || merges.length === 0) return
+  for (const rng of merges) {
+    const v = rows[rng.s.r]?.[rng.s.c]
+    if (v === undefined || v === '') continue
+    for (let r = rng.s.r; r <= rng.e.r && r < rows.length; r++) {
+      const row = rows[r]
+      for (let c = rng.s.c; c <= rng.e.c; c++) {
+        if (r === rng.s.r && c === rng.s.c) continue
+        while (row.length <= c) row.push('')
+        row[c] = v
+      }
+    }
+  }
+}
+
+/**
  * xlsx / xls / csv ファイルを読み、全シートを2次元配列にして返す。
  * 空セルは '' に統一。数値セルは number のまま返す。
+ * 空行も保持する（取込モーダルの行番号を Excel の行番号と一致させるため）。
  */
 export async function readWorkbook(
   file: File,
@@ -51,7 +73,9 @@ export async function readWorkbook(
   let wb: XLSX.WorkBook
   if (isCsv) {
     const text = await readCsvText(file)
-    wb = XLSX.read(text, { type: 'string' })
+    // raw: true — 日付様の文字列（例: 2026-07-07）が Excel シリアル値に
+    // 変換されるのを防ぎ、セルを文字列のまま保持する（数値化は取込側で行う）
+    wb = XLSX.read(text, { type: 'string', raw: true })
   } else {
     const buf = await file.arrayBuffer()
     wb = XLSX.read(buf, { type: 'array', cellDates: true })
@@ -62,10 +86,11 @@ export async function readWorkbook(
       ? (XLSX.utils.sheet_to_json(ws, {
           header: 1,
           defval: '',
-          blankrows: false,
+          blankrows: true,
         }) as unknown[][])
       : []
     const rows = raw.map((row) => row.map(normalizeCell))
+    if (ws) expandMerges(ws, rows)
     return { sheetName, rows }
   })
 }

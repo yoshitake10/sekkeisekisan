@@ -24,6 +24,8 @@ const FALLBACK_DENSITY_M2_PER_PERSON = 10
 const MAX_KW_PER_UNIT = 14
 /** 人員換気量 m3/h・人 */
 const VENT_PER_PERSON_M3H = 30
+/** 浮動小数点の境界誤差対策（14.000000000000002 kW 等を 14kW 機で許容する） */
+const EPS = 1e-9
 
 /** 能力を満たす最小機を返す（coolingKw 昇順の最小） */
 function pickSmallestSufficient(
@@ -34,7 +36,7 @@ function pickSmallestSufficient(
   for (const m of models) {
     const kw = m.coolingKw ?? 0
     if (kw <= 0) continue
-    if (kw >= requiredKw && (!best || kw < (best.coolingKw ?? 0))) best = m
+    if (kw >= requiredKw - EPS && (!best || kw < (best.coolingKw ?? 0))) best = m
   }
   return best
 }
@@ -54,8 +56,8 @@ export function calcRoom(
   // --- 台数（0なら自動: 1台あたり最大 14kW(5馬力) 目安） ---
   const unitCount =
     room.unitCount > 0
-      ? Math.floor(room.unitCount)
-      : Math.max(1, Math.ceil(requiredCoolingKw / MAX_KW_PER_UNIT))
+      ? Math.max(1, Math.round(room.unitCount))
+      : Math.max(1, Math.ceil(requiredCoolingKw / MAX_KW_PER_UNIT - EPS))
   const requiredKwPerUnit = requiredCoolingKw / unitCount
 
   // --- 推奨機種（スカイエア。希望形態を優先し、なければ形態を問わず） ---
@@ -86,7 +88,7 @@ export function calcRoom(
       .filter((m) => m.category === 'ventilation-erv' && (m.airflowM3h ?? 0) > 0)
       .sort((a, b) => (a.airflowM3h ?? 0) - (b.airflowM3h ?? 0))
     recommendedVentModel =
-      ervs.find((m) => (m.airflowM3h ?? 0) >= requiredVentilationM3h) ??
+      ervs.find((m) => (m.airflowM3h ?? 0) >= requiredVentilationM3h - EPS) ??
       ervs[ervs.length - 1]
   }
 
@@ -107,7 +109,7 @@ export function ventUnitCount(requiredM3h: number, model: DaikinModel): number {
   if (requiredM3h <= 0) return 0
   const flow = model.airflowM3h ?? 0
   if (flow <= 0) return 1
-  return Math.max(1, Math.ceil(requiredM3h / flow))
+  return Math.max(1, Math.ceil(requiredM3h / flow - EPS))
 }
 
 /**
@@ -115,12 +117,14 @@ export function ventUnitCount(requiredM3h: number, model: DaikinModel): number {
  *  - selectedModelId / selectedVentModelId があればそれを優先、なければ推奨機
  *  - 同一機種は数量を集約し、備考に対象室名を列挙
  *  - 空調機器は category「機器」、換気機器は「換気工事」
+ *  - skippedRooms: 必要能力・必要換気量があるのに機種が確定できず転記から
+ *    欠落した部屋名（呼び出し側で警告表示に使う）
  */
 export function roomsToQuantityItems(
   rooms: Room[],
   loadUnits: LoadUnit[],
   models: DaikinModel[],
-): QuantityItem[] {
+): { items: QuantityItem[]; skippedRooms: string[] } {
   interface Agg {
     model: DaikinModel
     category: string
@@ -146,14 +150,22 @@ export function roomsToQuantityItems(
     }
   }
 
+  const skipped = new Set<string>()
+
   for (const room of rooms) {
     const calc = calcRoom(room, loadUnits, models)
+    const roomLabel = room.name || '(無名)'
 
     // 空調機器（負荷が0の部屋は転記しない）
     const acModel =
       models.find((m) => m.id === room.selectedModelId) ?? calc.recommendedModel
-    if (acModel && calc.requiredCoolingKw > 0) {
-      add(acModel, '機器', calc.unitCount, room.name)
+    if (calc.requiredCoolingKw > 0) {
+      if (acModel) {
+        add(acModel, '機器', calc.unitCount, room.name)
+      } else {
+        // 必要能力があるのに機種が確定しない → 警告用に記録
+        skipped.add(roomLabel)
+      }
     }
 
     // 換気機器
@@ -168,11 +180,14 @@ export function roomsToQuantityItems(
           ventUnitCount(calc.requiredVentilationM3h, ventModel),
           room.name,
         )
+      } else {
+        // 換気が必要なのに換気機器が確定しない → 警告用に記録
+        skipped.add(roomLabel)
       }
     }
   }
 
-  return Array.from(acc.values()).map(
+  const items = Array.from(acc.values()).map(
     (a): QuantityItem => ({
       id: genId('qty'),
       category: a.category,
@@ -185,4 +200,6 @@ export function roomsToQuantityItems(
       remarks: a.roomNames.length > 0 ? `対象室: ${a.roomNames.join('、')}` : undefined,
     }),
   )
+
+  return { items, skippedRooms: Array.from(skipped) }
 }

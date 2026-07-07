@@ -7,7 +7,7 @@ import PriceMasterPage from './pages/PriceMasterPage'
 import EstimatePage from './pages/EstimatePage'
 import EquipmentDatabasePage from './pages/EquipmentDatabasePage'
 import MasterSettingsPage from './pages/MasterSettingsPage'
-import { useActiveProject } from './store'
+import { useActiveProject, useStore } from './store'
 
 type TabKey =
   | 'project'
@@ -33,6 +33,7 @@ const TABS: { key: TabKey; label: string; section?: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<TabKey>('project')
   const project = useActiveProject()
+  const saveError = useStore((s) => s.saveError)
 
   return (
     <div className="app-shell">
@@ -58,6 +59,19 @@ export default function App() {
         </div>
       </nav>
       <div className="main-area">
+        {saveError && (
+          <div
+            className="no-print"
+            style={{
+              background: '#c62f2f',
+              color: '#fff',
+              padding: '8px 16px',
+              fontWeight: 600,
+            }}
+          >
+            ⚠ {saveError}
+          </div>
+        )}
         <main className="page">
           {tab === 'project' && <ProjectPage />}
           {tab === 'selection' && <EquipmentSelectionPage />}

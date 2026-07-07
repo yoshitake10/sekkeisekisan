@@ -6,15 +6,19 @@ import { parseNumber } from '../utils/format'
 export default function MasterSettingsPage() {
   const loadUnits = useStore((s) => s.loadUnits)
   const roughCosts = useStore((s) => s.roughCosts)
-  const { setLoadUnits, setRoughCosts } = useStore()
+  const { setLoadUnits, setRoughCosts, renameLoadUsage } = useStore()
 
   function updLoad(i: number, key: string, v: string) {
+    if (key === 'usage') {
+      // 用途名の変更は全プロジェクトの部屋・主用途の参照も追従させる
+      renameLoadUsage(loadUnits[i].usage, v)
+      return
+    }
     const rows = loadUnits.map((r, idx) =>
       idx === i
         ? {
             ...r,
-            [key]:
-              key === 'usage' || key === 'notes' ? v : parseNumber(v) || 0,
+            [key]: key === 'notes' ? v : parseNumber(v) || 0,
           }
         : r,
     )
