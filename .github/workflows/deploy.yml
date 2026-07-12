@@ -2,6 +2,10 @@ name: Deploy to GitHub Pages
 
 # 作業ブランチ（＝現在のデフォルトブランチ）または main への push、
 # もしくは手動実行でビルドし、GitHub Pages へ公開する。
+#
+# 【初回のみ】リポジトリの Settings → Pages →
+#   「Build and deployment」の Source を「GitHub Actions」に設定してください。
+#   （Pages サイトの新規作成は自動実行の権限では行えないため手動設定が必要です）
 on:
   push:
     branches:
@@ -15,7 +19,7 @@ permissions:
   pages: write
   id-token: write
 
-# 公開は同時に1つだけ（進行中があればキャンセルせず待つ）
+# 公開は同時に1つだけ（進行中があれば待つ）
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -30,7 +34,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -38,12 +42,6 @@ jobs:
 
       - name: Build
         run: npm run build
-
-      # Pages が未有効でも自動で有効化を試みる（enablement: true）
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
