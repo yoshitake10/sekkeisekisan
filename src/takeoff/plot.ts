@@ -112,9 +112,14 @@ export function findPlotMeasurement(
   )
 }
 
+/** プロットマーカーの実寸（m）。天カセ4方向 950mm角 ≒ 1m角の記号として描く */
+export const PLOT_MARKER_SIZE_M = 1.0
+
 /**
  * プロットマーカーの描画（画面座標）。四角＋対角線の機器シンボル風。
  * PDF / DXF 両ビューアのオーバーレイ描画から共用する。
+ * halfPx: マーカー半辺の画面px。スケール設定済みなら実寸1m角相当を渡す。
+ * 省略時は固定サイズ（スケール未設定時のフォールバック）。
  */
 export function drawPlotMarker(
   ctx: CanvasRenderingContext2D,
@@ -122,8 +127,9 @@ export function drawPlotMarker(
   y: number,
   color: string,
   selected: boolean,
+  halfPx?: number,
 ): void {
-  const r = selected ? 9 : 7
+  const r = halfPx !== undefined ? Math.max(4, halfPx) + (selected ? 2 : 0) : selected ? 9 : 7
   ctx.beginPath()
   ctx.rect(x - r, y - r, r * 2, r * 2)
   ctx.fillStyle = color + '3a'

@@ -14,7 +14,13 @@ import { genId } from '../utils/id'
 import { num, parseNumber } from '../utils/format'
 import MeasurementPanel from './MeasurementPanel'
 import EquipmentPlotPanel from './EquipmentPlotPanel'
-import { buildPlotTargets, drawPlotMarker, findPlotMeasurement, newPlotMeasurement } from './plot'
+import {
+  PLOT_MARKER_SIZE_M,
+  buildPlotTargets,
+  drawPlotMarker,
+  findPlotMeasurement,
+  newPlotMeasurement,
+} from './plot'
 
 // ---------- 定数 ----------
 
@@ -642,6 +648,11 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
 
     const S = (p: TakeoffPoint) => ({ x: p.x * view.scale + view.offsetX, y: view.offsetY - p.y * view.scale })
 
+    // プロットマーカーの半辺px（実寸1m角相当）。スケール未設定時は固定サイズ
+    const plotHalfPx = scaleMPerUnit
+      ? ((PLOT_MARKER_SIZE_M / 2) * view.scale) / scaleMPerUnit
+      : undefined
+
     function label(text: string, x: number, y: number, color: string) {
       if (!ctx) return
       ctx.font = 'bold 11px sans-serif'
@@ -709,10 +720,10 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
       if (m.points.length === 0) continue
       const selected = m.id === selectedId
       if (m.kind === 'plot') {
-        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）
+        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）。実寸1m角で描画
         for (const p of m.points) {
           const s = S(p)
-          drawPlotMarker(ctx, s.x, s.y, m.color, selected)
+          drawPlotMarker(ctx, s.x, s.y, m.color, selected, plotHalfPx)
         }
         const s0 = S(m.points[0])
         label(`${plotLabelOf(m)} ${num(m.value)}${m.unitName}`, s0.x, s0.y, m.color)
@@ -758,7 +769,7 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
     if (tool === 'plot' && hover && activePlotTarget) {
       const s = S(hover.p)
       ctx.globalAlpha = 0.6
-      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false)
+      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false, plotHalfPx)
       ctx.globalAlpha = 1
       label(activePlotTarget.label, s.x + 8, s.y - 6, activePlotTarget.color)
     }

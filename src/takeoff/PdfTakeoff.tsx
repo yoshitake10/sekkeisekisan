@@ -10,7 +10,13 @@ import { TAKEOFF_PRESETS, TOOL_LABELS } from './contract'
 import type { TakeoffTool, TakeoffViewProps } from './contract'
 import MeasurementPanel from './MeasurementPanel'
 import EquipmentPlotPanel from './EquipmentPlotPanel'
-import { buildPlotTargets, drawPlotMarker, findPlotMeasurement, newPlotMeasurement } from './plot'
+import {
+  PLOT_MARKER_SIZE_M,
+  buildPlotTargets,
+  drawPlotMarker,
+  findPlotMeasurement,
+  newPlotMeasurement,
+} from './plot'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -384,6 +390,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
     ctx.font = 'bold 11px sans-serif'
     ctx.textBaseline = 'bottom'
 
+    // プロットマーカーの半辺px（実寸1m角相当）。スケール未設定ページは固定サイズ
+    const plotHalfPx = scale ? ((PLOT_MARKER_SIZE_M / 2) * zoom) / scale : undefined
+
     const drawLabel = (text: string, x: number, y: number, color: string) => {
       ctx.lineWidth = 3
       ctx.strokeStyle = 'rgba(255,255,255,0.92)'
@@ -415,8 +424,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         const c = toScreen(centroid(m.points))
         drawLabel(`${m.label} ${num(m.value)}${m.unitName}`, c.x + 8, c.y - 8, m.color)
       } else if (m.kind === 'plot') {
-        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）
-        for (const p of pts) drawPlotMarker(ctx, p.x, p.y, m.color, sel)
+        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）。
+        // スケール設定済みページでは実寸1m角（950mm角機器相当）で描画する
+        for (const p of pts) drawPlotMarker(ctx, p.x, p.y, m.color, sel, plotHalfPx)
         const c = toScreen(centroid(m.points))
         drawLabel(`${plotLabelOf(m)} ${num(m.value)}${m.unitName}`, c.x + 9, c.y - 9, m.color)
       } else if (m.kind === 'length') {
@@ -444,7 +454,7 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
     if (tool === 'plot' && cursor && activePlotTarget) {
       const s = toScreen(cursor)
       ctx.globalAlpha = 0.6
-      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false)
+      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false, plotHalfPx)
       ctx.globalAlpha = 1
       drawLabel(activePlotTarget.label, s.x + 12, s.y - 10, activePlotTarget.color)
     }
@@ -549,6 +559,18 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
       // 未選択なら先頭の未完了対象を自動選択
       if (!plotTargets.some((x) => x.key === plotKey)) {
         setPlotKey(plotTargets[0].key)
+      }
+    }
+    // 拾い種別が変わったら拾い対象をその種別の先頭プリセットへ追従させる
+    // （例: 個数「室内機（台）」のまま面積拾いへ切替 → 単位が台のまま面積を拾ってしまう事故の防止）
+    const newKind = TOOL_KIND[t]
+    const prevKind = TOOL_KIND[tool]
+    if (newKind && newKind !== prevKind) {
+      const idx = TAKEOFF_PRESETS.findIndex((p) => p.kind === newKind)
+      if (idx >= 0) {
+        const p = TAKEOFF_PRESETS[idx]
+        setPresetSel(String(idx))
+        setTarget({ label: p.label, category: p.category, unitName: p.unitName })
       }
     }
     setTool(t)
