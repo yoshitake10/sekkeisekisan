@@ -17,6 +17,7 @@ import type { SheetData } from '../io/excel'
 import ImportMappingDialog from '../io/ImportMappingDialog'
 import type { ImportField } from '../io/ImportMappingDialog'
 import { itemAmountYen } from '../logic/estimate'
+import { equipmentRowsStale, inheritEditedPrices, roomsToQuantityItems } from '../logic/selection'
 
 const UNCATEGORIZED = '（未分類）'
 
@@ -55,6 +56,8 @@ function normMatch(s: string): string {
 export default function QuantityTablePage() {
   const project = useActiveProject()
   const unitPrices = useStore((s) => s.unitPrices)
+  const loadUnits = useStore((s) => s.loadUnits)
+  const daikinModels = useStore((s) => s.daikinModels)
   const addQuantityItems = useStore((s) => s.addQuantityItems)
   const updateQuantityItem = useStore((s) => s.updateQuantityItem)
   const removeQuantityItem = useStore((s) => s.removeQuantityItem)
@@ -93,6 +96,37 @@ export default function QuantityTablePage() {
   const totalAmount = groups.reduce((s, g) => s + g.subtotal, 0)
   const noPriceCount = filtered.filter((q) => q.unitPriceYen === undefined || q.unitPriceYen === null).length
   const importCount = items.filter((q) => q.source === 'import').length
+
+  /** 機器選定の内容と数量表の機器行の差異検知（転記忘れ・陳腐化の防止） */
+  const equipmentSync = useMemo(() => {
+    const equipRows = items.filter((q) => q.source === 'equipment')
+    if (project.rooms.length === 0) return 'none' as const
+    if (equipRows.length === 0) {
+      const { items: fresh } = roomsToQuantityItems(project.rooms, loadUnits, daikinModels)
+      return fresh.length > 0 ? ('untransferred' as const) : ('none' as const)
+    }
+    return equipmentRowsStale(project.rooms, loadUnits, daikinModels, items)
+      ? ('stale' as const)
+      : ('ok' as const)
+  }, [items, project.rooms, loadUnits, daikinModels])
+
+  /** 機器選定から（再）転記。編集済み単価は引き継ぐ */
+  function retransferEquipment() {
+    const { items: fresh, skippedRooms } = roomsToQuantityItems(
+      project.rooms,
+      loadUnits,
+      daikinModels,
+    )
+    const prevEquip = items.filter((q) => q.source === 'equipment')
+    const { items: merged, inherited } = inheritEditedPrices(fresh, prevEquip)
+    removeQuantityBySource('equipment')
+    addQuantityItems(merged)
+    let msg = `機器選定の結果 ${merged.length} 件を数量表へ反映しました。`
+    if (inherited > 0) msg += `\n（編集していた単価 ${inherited}件は引き継ぎました）`
+    if (skippedRooms.length > 0)
+      msg += `\n\n機種未確定のため転記されていない部屋: ${skippedRooms.join('、')}`
+    alert(msg)
+  }
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>(ITEM_CATEGORIES)
@@ -259,6 +293,31 @@ export default function QuantityTablePage() {
           図面拾い・機器選定・Excel取込・手入力の数量を一元管理します。単価マスタから一括で単価を引当て、詳細見積の内訳に使用します。
         </div>
       </div>
+
+      {equipmentSync === 'stale' && (
+        <div
+          className="note"
+          style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+        >
+          <span>
+            ⚠ 「機器選定」の内容とこの数量表の機器行に差異があります（機器選定を変更した後、再転記されていません）。
+          </span>
+          <button className="btn small accent" onClick={retransferEquipment}>
+            機器選定から再転記（単価は引き継ぐ）
+          </button>
+        </div>
+      )}
+      {equipmentSync === 'untransferred' && (
+        <div
+          className="note"
+          style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+        >
+          <span>「機器選定」の選定結果がまだ数量表に転記されていません。</span>
+          <button className="btn small accent" onClick={retransferEquipment}>
+            機器選定から転記する
+          </button>
+        </div>
+      )}
 
       <div className="toolbar">
         <button className="btn primary" onClick={addRow}>

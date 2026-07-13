@@ -22,7 +22,7 @@ export interface MeasurementPanelProps {
 }
 
 /** 拾いツール種別（各ビューア内のツールバーで共通利用） */
-export type TakeoffTool = 'pan' | 'scale' | 'count' | 'length' | 'area'
+export type TakeoffTool = 'pan' | 'scale' | 'count' | 'length' | 'area' | 'plot'
 
 export const TOOL_LABELS: Record<TakeoffTool, string> = {
   pan: '移動/選択',
@@ -30,6 +30,7 @@ export const TOOL_LABELS: Record<TakeoffTool, string> = {
   count: '個数カウント',
   length: '長さ拾い',
   area: '面積拾い',
+  plot: '機器プロット',
 }
 
 /** 拾い対象の既定プリセット（label, category, unit） */

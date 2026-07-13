@@ -30,11 +30,11 @@ export function dist(a: TakeoffPoint, b: TakeoffPoint): number {
 
 /** 測定種別ごとの実数値を計算する。scale: 1図面単位あたりのm */
 export function measurementValue(
-  kind: 'count' | 'length' | 'area',
+  kind: 'count' | 'length' | 'area' | 'plot',
   points: TakeoffPoint[],
   scaleMPerUnit: number | undefined,
 ): number {
-  if (kind === 'count') return points.length
+  if (kind === 'count' || kind === 'plot') return points.length
   const s = scaleMPerUnit ?? 0
   if (kind === 'length') return polylineLength(points) * s
   return polygonArea(points) * s * s

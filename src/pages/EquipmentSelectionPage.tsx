@@ -1,6 +1,11 @@
 import { useMemo } from 'react'
 import { useActiveProject, useStore } from '../store'
-import { calcRoom, roomsToQuantityItems, ventUnitCount } from '../logic/selection'
+import {
+  calcRoom,
+  inheritEditedPrices,
+  roomsToQuantityItems,
+  ventUnitCount,
+} from '../logic/selection'
 import { num, parseNumber } from '../utils/format'
 import { INDOOR_UNIT_TYPE_LABELS } from '../types'
 import type { DaikinModel, IndoorUnitType, Room } from '../types'
@@ -98,18 +103,31 @@ export default function EquipmentSelectionPage() {
     return { area, kw, acUnits, acPendingRooms, ventUnits }
   }, [rooms, calcs, models])
 
-  /** 数量表へ転記 */
+  /** 数量表へ転記（再転記時は編集済み単価を引き継ぐ） */
   function transferToQuantity() {
-    const { items, skippedRooms } = roomsToQuantityItems(rooms, loadUnits, models)
+    const { items: fresh, skippedRooms } = roomsToQuantityItems(rooms, loadUnits, models)
+    const prevEquip = project.quantityItems.filter((q) => q.source === 'equipment')
+    const { items, inherited } = inheritEditedPrices(fresh, prevEquip)
     removeQuantityBySource('equipment')
     addQuantityItems(items)
     let msg =
       `機器選定の結果 ${items.length} 件を数量表へ転記しました。\n` +
       '（数量表にあった機器選定由来の行は置き換えられています）'
+    if (inherited > 0) {
+      msg += `\n（数量表側で編集していた単価 ${inherited}件は引き継ぎました）`
+    }
     if (skippedRooms.length > 0) {
       msg +=
         '\n\n以下の部屋は機種未確定のため転記されていません: ' +
         skippedRooms.join('、')
+    }
+    // 図面拾い・取込・手入力にも機器/換気の行がある場合は二重計上注意を添える
+    const otherEquipRows = project.quantityItems.filter(
+      (q) =>
+        q.source !== 'equipment' && (q.category === '機器' || q.category === '換気工事'),
+    )
+    if (otherEquipRows.length > 0) {
+      msg += `\n\n※数量表には機器選定以外の出典（図面拾い・取込・手入力）の機器・換気行が ${otherEquipRows.length} 行あります。同じ機器の二重計上になっていないか数量表タブで確認してください。`
     }
     alert(msg)
   }

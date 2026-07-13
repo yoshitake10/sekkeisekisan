@@ -203,3 +203,50 @@ export function roomsToQuantityItems(
 
   return { items, skippedRooms: Array.from(skipped) }
 }
+
+/**
+ * 機器選定→数量表の再転記時に、前回転記後に編集・引当された単価を
+ * 新しい行へ引き継ぐ（同じ名称＋規格の行が対象）。
+ * カタログ定価のまま（未編集）の行は新しい定価で上書きされる。
+ * 戻り値: 引き継いだ件数
+ */
+export function inheritEditedPrices(
+  newItems: QuantityItem[],
+  prevEquipmentItems: QuantityItem[],
+): { items: QuantityItem[]; inherited: number } {
+  const prevByKey = new Map(prevEquipmentItems.map((q) => [`${q.name}|${q.spec}`, q]))
+  let inherited = 0
+  const items = newItems.map((it) => {
+    const old = prevByKey.get(`${it.name}|${it.spec}`)
+    if (
+      old &&
+      old.unitPriceYen !== undefined &&
+      old.unitPriceYen !== null &&
+      old.unitPriceYen !== it.unitPriceYen
+    ) {
+      inherited++
+      return { ...it, unitPriceYen: old.unitPriceYen, unitPriceRef: old.unitPriceRef }
+    }
+    return it
+  })
+  return { items, inherited }
+}
+
+/**
+ * 機器選定の結果と数量表の機器行（source='equipment'）の差異を検出する。
+ * 名称・規格・数量のいずれかが違う／行の過不足があると true。
+ * 数量表側の単価編集は差異とみなさない。
+ */
+export function equipmentRowsStale(
+  rooms: Room[],
+  loadUnits: LoadUnit[],
+  models: DaikinModel[],
+  currentItems: QuantityItem[],
+): boolean {
+  const equipRows = currentItems.filter((q) => q.source === 'equipment')
+  const { items } = roomsToQuantityItems(rooms, loadUnits, models)
+  if (equipRows.length !== items.length) return equipRows.length > 0 || items.length > 0
+  const key = (q: QuantityItem) => `${q.category}|${q.name}|${q.spec}|${q.quantity}`
+  const cur = new Set(equipRows.map(key))
+  return !items.every((q) => cur.has(key(q)))
+}

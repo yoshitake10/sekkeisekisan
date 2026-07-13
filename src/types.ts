@@ -180,7 +180,13 @@ export interface QuantityItem {
 
 // ---------- 図面拾い ----------
 
-export type MeasureKind = 'count' | 'length' | 'area'
+/**
+ * 測定種別。
+ *  - count/length/area: 図面上に描かれているものを拾う
+ *  - plot: 図面上に描かれていない機器を配置する（機器選定の結果が元）。
+ *    数量は「機器選定→数量表転記」が正であり、plot は数量表へ転記しない
+ */
+export type MeasureKind = 'count' | 'length' | 'area' | 'plot'
 
 export interface TakeoffPoint {
   x: number
@@ -212,6 +218,12 @@ export interface Measurement {
   spec?: string
   /** ユーザーが数量を手修正した場合 true（スケール再計算で上書きしない） */
   valueOverridden?: boolean
+  /** kind='plot': 配置元の部屋（Room.id） */
+  roomId?: string
+  /** kind='plot': 配置した機器（DaikinModel.id） */
+  modelId?: string
+  /** kind='plot': 空調機か換気機か */
+  plotKind?: 'ac' | 'vent'
 }
 
 export interface DrawingMeta {

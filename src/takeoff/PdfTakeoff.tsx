@@ -9,6 +9,8 @@ import { colorForIndex, dist, measurementValue, polygonArea, polylineLength } fr
 import { TAKEOFF_PRESETS, TOOL_LABELS } from './contract'
 import type { TakeoffTool, TakeoffViewProps } from './contract'
 import MeasurementPanel from './MeasurementPanel'
+import EquipmentPlotPanel from './EquipmentPlotPanel'
+import { buildPlotTargets, drawPlotMarker, findPlotMeasurement, newPlotMeasurement } from './plot'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -29,6 +31,7 @@ const TOOL_HINTS: Record<TakeoffTool, string> = {
   length:
     'クリック: 頂点追加 ／ ダブルクリック: 確定 ／ 右クリック: 1つ戻す ／ Esc: 中止 ／ 中ボタンドラッグ: 移動',
   area: 'クリック: 頂点追加 ／ ダブルクリック: 閉じて確定 ／ 右クリック: 1つ戻す ／ Esc: 中止 ／ 中ボタンドラッグ: 移動',
+  plot: '右パネルで配置する機器を選択 → クリックで1台ずつ配置 ／ 右クリック: 1つ戻す',
 }
 
 const TOOL_KIND: Partial<Record<TakeoffTool, MeasureKind>> = {
@@ -103,6 +106,9 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const upsertDrawing = useStore((s) => s.upsertDrawing)
   const addMeasurement = useStore((s) => s.addMeasurement)
   const updateMeasurement = useStore((s) => s.updateMeasurement)
+  const removeMeasurement = useStore((s) => s.removeMeasurement)
+  const loadUnits = useStore((s) => s.loadUnits)
+  const daikinModels = useStore((s) => s.daikinModels)
 
   const meta = project.drawings.find((d) => d.id === drawingId)
 
@@ -135,6 +141,8 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
     category: TAKEOFF_PRESETS[0].category,
     unitName: TAKEOFF_PRESETS[0].unitName,
   })
+  /** 機器プロットの配置対象キー（`${roomId}|${plotKind}`） */
+  const [plotKey, setPlotKey] = useState<string | null>(null)
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const baseRef = useRef<HTMLCanvasElement>(null)
@@ -151,6 +159,62 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const pageMeasurements = project.measurements.filter(
     (m) => m.drawingId === drawingId && m.pageIndex === pageIndex,
   )
+
+  // ---------- 機器プロット ----------
+  const plotTargets = buildPlotTargets(project, loadUnits, daikinModels)
+  const activePlotTarget = plotTargets.find((t) => t.key === plotKey)
+  const hasPlots = project.measurements.some((m) => m.kind === 'plot' && m.drawingId === drawingId)
+
+  /** 現在のラベル（部屋名・機種変更に追従）。孤立プロットは保存済みラベルを使用 */
+  function plotLabelOf(m: Measurement): string {
+    const t = plotTargets.find((x) => x.roomId === m.roomId && x.plotKind === m.plotKind)
+    return t?.label ?? m.label
+  }
+
+  /** クリック位置に選択中の機器を1台配置する */
+  function placePlot(p: TakeoffPoint) {
+    const t = activePlotTarget
+    if (!t) {
+      alert('右の「機器プロット（配置）」から配置する機器を選択してください。')
+      return
+    }
+    const existing = findPlotMeasurement(project.measurements, drawingId, pageIndex, t)
+    if (existing) {
+      const points = [...existing.points, p]
+      updateMeasurement(existing.id, {
+        points,
+        value: points.length,
+        label: t.label,
+        modelId: t.model.id,
+        spec: t.model.modelNo,
+      })
+    } else {
+      const m = newPlotMeasurement(genId('ms'), drawingId, pageIndex, t)
+      addMeasurement({ ...m, points: [p], value: 1 })
+    }
+  }
+
+  /** 選択中対象の配置を1つ戻す（このページ上） */
+  function undoPlot() {
+    const t = activePlotTarget
+    if (!t) return
+    const existing = findPlotMeasurement(project.measurements, drawingId, pageIndex, t)
+    if (!existing || existing.points.length === 0) return
+    if (existing.points.length === 1) {
+      removeMeasurement(existing.id)
+    } else {
+      const points = existing.points.slice(0, -1)
+      updateMeasurement(existing.id, { points, value: points.length })
+    }
+  }
+
+  /** パネルで対象を選んだら plot ツールへ切替 */
+  function selectPlotTarget(key: string) {
+    setPlotKey(key)
+    setTool('plot')
+    setDraft([])
+    setCursor(null)
+  }
 
   // ---------- 座標変換 ----------
   // 画面(CSS px) = PDFユーザー座標 * zoom + offset
@@ -350,6 +414,11 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         for (const p of pts) drawVertex(p.x, p.y, m.color, sel ? 8 : 6)
         const c = toScreen(centroid(m.points))
         drawLabel(`${m.label} ${num(m.value)}${m.unitName}`, c.x + 8, c.y - 8, m.color)
+      } else if (m.kind === 'plot') {
+        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）
+        for (const p of pts) drawPlotMarker(ctx, p.x, p.y, m.color, sel)
+        const c = toScreen(centroid(m.points))
+        drawLabel(`${plotLabelOf(m)} ${num(m.value)}${m.unitName}`, c.x + 9, c.y - 9, m.color)
       } else if (m.kind === 'length') {
         ctx.beginPath()
         pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)))
@@ -371,8 +440,17 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
       }
     }
 
+    // --- 機器プロットのカーソルプレビュー ---
+    if (tool === 'plot' && cursor && activePlotTarget) {
+      const s = toScreen(cursor)
+      ctx.globalAlpha = 0.6
+      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false)
+      ctx.globalAlpha = 1
+      drawLabel(activePlotTarget.label, s.x + 12, s.y - 10, activePlotTarget.color)
+    }
+
     // --- 作図中プレビュー ---
-    if (tool !== 'pan' && draft.length > 0) {
+    if (tool !== 'pan' && tool !== 'plot' && draft.length > 0) {
       const color = tool === 'scale' ? '#0b62c4' : colorForLabel(target.label)
       const pts = draft.map(toScreen)
       const cur = cursor ? toScreen(cursor) : null
@@ -461,6 +539,18 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         'このページのスケールが未設定です。\n長さ・面積を拾う前に「スケール設定」ツールで既知の寸法（通り芯間など）から基準を設定してください。\n（スケールはページごとに設定します）',
       )
     }
+    if (t === 'plot') {
+      if (plotTargets.length === 0) {
+        alert(
+          '配置できる機器がありません。\n先に「機器選定」タブで部屋（用途・面積）を登録してください。選定された機種が配置対象になります。',
+        )
+        return
+      }
+      // 未選択なら先頭の未完了対象を自動選択
+      if (!plotTargets.some((x) => x.key === plotKey)) {
+        setPlotKey(plotTargets[0].key)
+      }
+    }
     setTool(t)
     setDraft([])
     setCursor(null)
@@ -548,7 +638,7 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
     for (const m of pageMeasurements) {
       const pts = m.points.map(toScreen)
       let d = Infinity
-      if (m.kind === 'count') {
+      if (m.kind === 'count' || m.kind === 'plot') {
         for (const q of pts) d = Math.min(d, Math.hypot(q.x - sx, q.y - sy))
       } else {
         for (let i = 1; i < pts.length; i++) d = Math.min(d, distToSegment(sx, sy, pts[i - 1], pts[i]))
@@ -637,12 +727,17 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
           m.drawingId !== drawingId ||
           m.pageIndex !== pageIndex ||
           m.kind === 'count' ||
+          m.kind === 'plot' ||
           m.points.length === 0 ||
           m.valueOverridden === true
         )
           continue
         updateMeasurement(m.id, { value: measurementValue(m.kind, m.points, newScale) })
       }
+      return
+    }
+    if (tool === 'plot') {
+      placePlot(p)
       return
     }
     // count / length / area
@@ -666,6 +761,10 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
   }
   function onContextMenu(e: React.MouseEvent) {
     e.preventDefault()
+    if (tool === 'plot') {
+      undoPlot()
+      return
+    }
     if (draft.length > 0) setDraft(draft.slice(0, -1))
   }
 
@@ -741,8 +840,32 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
         </button>
       </div>
 
-      {/* 拾い対象・スケール表示 */}
+      {/* 拾い対象・スケール表示（機器プロット中は拾い対象入力の代わりに配置対象を表示） */}
       <div className="toolbar">
+        {tool === 'plot' ? (
+          <span className="small">
+            配置対象:{' '}
+            {activePlotTarget ? (
+              <>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 12,
+                    height: 12,
+                    background: activePlotTarget.color,
+                    border: '1px solid rgba(0,0,0,0.2)',
+                    verticalAlign: 'middle',
+                    marginRight: 4,
+                  }}
+                />
+                <b>{activePlotTarget.label}</b>（クリックで1台ずつ配置）
+              </>
+            ) : (
+              '右の「機器プロット（配置）」から機器を選択してください'
+            )}
+          </span>
+        ) : (
+          <>
         <label className="field">
           <span>拾い対象プリセット</span>
           <select value={presetSel} onChange={(e) => onPresetChange(e.target.value)}>
@@ -801,6 +924,8 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
           }}
           title="この対象の表示色"
         />
+          </>
+        )}
         <span className="spacer" />
         {scale ? (
           <span className="badge green" title={`1図面単位 = ${scale} m（ページごとに設定）`}>
@@ -847,6 +972,13 @@ export default function PdfTakeoff({ file, drawingId }: TakeoffViewProps) {
           </div>
         </div>
         <div className="takeoff-side">
+          {(tool === 'plot' || hasPlots || plotTargets.length > 0) && (
+            <EquipmentPlotPanel
+              drawingId={drawingId}
+              activeKey={plotKey}
+              onSelectTarget={selectPlotTarget}
+            />
+          )}
           <MeasurementPanel
             drawingId={drawingId}
             pageIndex={pageIndex}

@@ -13,6 +13,8 @@ import { drawScene, parseDxf, type DxfScene } from './dxfRender'
 import { genId } from '../utils/id'
 import { num, parseNumber } from '../utils/format'
 import MeasurementPanel from './MeasurementPanel'
+import EquipmentPlotPanel from './EquipmentPlotPanel'
+import { buildPlotTargets, drawPlotMarker, findPlotMeasurement, newPlotMeasurement } from './plot'
 
 // ---------- 定数 ----------
 
@@ -21,7 +23,7 @@ const CLICK_MOVE_PX = 4 // これ以上動いたらクリック扱いしない
 const MIN_SCALE = 1e-9
 const MAX_SCALE = 1e9
 
-const TOOLS: TakeoffTool[] = ['pan', 'scale', 'count', 'length', 'area']
+const TOOLS: TakeoffTool[] = ['pan', 'scale', 'count', 'length', 'area', 'plot']
 
 const HINTS: Record<TakeoffTool, string> = {
   pan: 'ドラッグ: 画面移動 ／ ホイール: 拡大縮小 ／ クリック: 測定を選択',
@@ -29,6 +31,7 @@ const HINTS: Record<TakeoffTool, string> = {
   count: 'クリックで1点ずつ追加 → ダブルクリック か「確定」で保存（ダブルクリック位置は数えない） ／ Esc: 取消（ホイール: 拡大縮小）',
   length: 'クリックで頂点を追加（線分端点に自動スナップ）→ ダブルクリックで確定 ／ Esc: 取消',
   area: 'クリックで多角形の頂点を追加 → ダブルクリックで確定 ／ Esc: 取消',
+  plot: '右パネルで配置する機器を選択 → クリックで1台ずつ配置 ／ 右クリック: 1つ戻す',
 }
 
 interface ViewState {
@@ -108,6 +111,9 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const upsertDrawing = useStore((s) => s.upsertDrawing)
   const addMeasurement = useStore((s) => s.addMeasurement)
   const updateMeasurement = useStore((s) => s.updateMeasurement)
+  const removeMeasurement = useStore((s) => s.removeMeasurement)
+  const loadUnits = useStore((s) => s.loadUnits)
+  const daikinModels = useStore((s) => s.daikinModels)
 
   const meta = project.drawings.find((d) => d.id === drawingId)
   const measurements = useMemo(
@@ -128,6 +134,8 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const [target, setTarget] = useState({ label: '室内機', category: '機器', unitName: '台' })
   const [scaleDraft, setScaleDraft] = useState<{ points: TakeoffPoint[]; input: string } | null>(null)
   const [dragging, setDragging] = useState(false)
+  /** 機器プロットの配置対象キー（`${roomId}|${plotKind}`） */
+  const [plotKey, setPlotKey] = useState<string | null>(null)
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const baseRef = useRef<HTMLCanvasElement>(null)
@@ -278,6 +286,81 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
     [measurements],
   )
 
+  // --- 機器プロット ---
+  const plotTargets = useMemo(
+    () => buildPlotTargets(project, loadUnits, daikinModels),
+    [project, loadUnits, daikinModels],
+  )
+  const activePlotTarget = plotTargets.find((t) => t.key === plotKey)
+  const hasPlots = measurements.some((m) => m.kind === 'plot')
+
+  /** 現在のラベル（部屋名・機種変更に追従）。孤立プロットは保存済みラベルを使用 */
+  const plotLabelOf = useCallback(
+    (m: Measurement): string => {
+      const t = plotTargets.find((x) => x.roomId === m.roomId && x.plotKind === m.plotKind)
+      return t?.label ?? m.label
+    },
+    [plotTargets],
+  )
+
+  /** クリック位置に選択中の機器を1台配置する */
+  function placePlot(p: TakeoffPoint) {
+    const t = activePlotTarget
+    if (!t) {
+      alert('右の「機器プロット（配置）」から配置する機器を選択してください。')
+      return
+    }
+    const existing = findPlotMeasurement(project.measurements, drawingId, 0, t)
+    if (existing) {
+      const points = [...existing.points, p]
+      updateMeasurement(existing.id, {
+        points,
+        value: points.length,
+        label: t.label,
+        modelId: t.model.id,
+        spec: t.model.modelNo,
+      })
+    } else {
+      const m = newPlotMeasurement(genId('ms'), drawingId, 0, t)
+      addMeasurement({ ...m, points: [p], value: 1 })
+    }
+  }
+
+  /** 選択中対象の配置を1つ戻す */
+  function undoPlot() {
+    const t = activePlotTarget
+    if (!t) return
+    const existing = findPlotMeasurement(project.measurements, drawingId, 0, t)
+    if (!existing || existing.points.length === 0) return
+    if (existing.points.length === 1) {
+      removeMeasurement(existing.id)
+    } else {
+      const points = existing.points.slice(0, -1)
+      updateMeasurement(existing.id, { points, value: points.length })
+    }
+  }
+
+  /** ツール選択（plot は配置対象の存在チェック＋自動選択） */
+  function selectTool(t: TakeoffTool) {
+    if (t === 'plot') {
+      if (plotTargets.length === 0) {
+        alert(
+          '配置できる機器がありません。\n先に「機器選定」タブで部屋（用途・面積）を登録してください。選定された機種が配置対象になります。',
+        )
+        return
+      }
+      if (!plotTargets.some((x) => x.key === plotKey)) setPlotKey(plotTargets[0].key)
+    }
+    setTool(t)
+  }
+
+  /** パネルで対象を選んだら plot ツールへ切替 */
+  function selectPlotTarget(key: string) {
+    setPlotKey(key)
+    setTool('plot')
+    setPending([])
+  }
+
   // --- 測定の確定 ---
   const commitPending = useCallback(
     (pointsArg?: TakeoffPoint[]) => {
@@ -340,7 +423,8 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
   const rescaleMeasurements = useCallback(
     (newScale: number) => {
       for (const m of measurements) {
-        if (m.kind === 'count' || m.points.length === 0 || m.valueOverridden) continue
+        if (m.kind === 'count' || m.kind === 'plot' || m.points.length === 0 || m.valueOverridden)
+          continue
         updateMeasurement(m.id, { value: measurementValue(m.kind, m.points, newScale) })
       }
     },
@@ -461,8 +545,21 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
       )
       return
     }
+    if (tool === 'plot') {
+      placePlot(toModel(sx, sy))
+      return
+    }
     const { p } = snapModelPoint(toModel(sx, sy))
     setPending((prev) => [...prev, p])
+  }
+
+  function onContextMenu(e: React.MouseEvent) {
+    e.preventDefault()
+    if (tool === 'plot') {
+      undoPlot()
+      return
+    }
+    if (pending.length > 0) setPending(pending.slice(0, -1))
   }
 
   function onDoubleClick() {
@@ -611,7 +708,15 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
     for (const m of measurements) {
       if (m.points.length === 0) continue
       const selected = m.id === selectedId
-      if (m.kind === 'count') {
+      if (m.kind === 'plot') {
+        // 機器プロット: 四角マーカー＋対角線（機器シンボル風）
+        for (const p of m.points) {
+          const s = S(p)
+          drawPlotMarker(ctx, s.x, s.y, m.color, selected)
+        }
+        const s0 = S(m.points[0])
+        label(`${plotLabelOf(m)} ${num(m.value)}${m.unitName}`, s0.x, s0.y, m.color)
+      } else if (m.kind === 'count') {
         drawCountMarkers(m.points, m.color, selected)
         if (selected) {
           const s = S(m.points[0])
@@ -649,6 +754,15 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
       }
     }
 
+    // 機器プロットのカーソルプレビュー
+    if (tool === 'plot' && hover && activePlotTarget) {
+      const s = S(hover.p)
+      ctx.globalAlpha = 0.6
+      drawPlotMarker(ctx, s.x, s.y, activePlotTarget.color, false)
+      ctx.globalAlpha = 1
+      label(activePlotTarget.label, s.x + 8, s.y - 6, activePlotTarget.color)
+    }
+
     // スケール補正の2点
     if (scaleDraft && scaleDraft.points.length > 0) {
       ctx.setLineDash([6, 4])
@@ -663,7 +777,7 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
       ctx.lineWidth = 1.6
       ctx.strokeRect(s.x - 5, s.y - 5, 10, 10)
     }
-  }, [measurements, pending, hover, selectedId, view, size, tool, kind, scaleDraft, target, colorFor, scaleMPerUnit])
+  }, [measurements, pending, hover, selectedId, view, size, tool, kind, scaleDraft, target, colorFor, scaleMPerUnit, activePlotTarget, plotLabelOf])
 
   // --- ブロック集計（個数降順） ---
   const blockRows = useMemo(() => {
@@ -698,7 +812,7 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
           <button
             key={t}
             className={'btn small' + (tool === t ? ' active' : '')}
-            onClick={() => setTool(t)}
+            onClick={() => selectTool(t)}
             title={HINTS[t]}
           >
             {TOOL_LABELS[t]}
@@ -755,6 +869,7 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
           onPointerLeave={() => setHover(null)}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
+          onContextMenu={onContextMenu}
         >
           <canvas ref={baseRef} />
           <canvas ref={overlayRef} />
@@ -912,6 +1027,15 @@ export default function DxfTakeoff({ file, drawingId }: TakeoffViewProps) {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* 機器プロット（配置） */}
+          {(tool === 'plot' || hasPlots || plotTargets.length > 0) && (
+            <EquipmentPlotPanel
+              drawingId={drawingId}
+              activeKey={plotKey}
+              onSelectTarget={selectPlotTarget}
+            />
           )}
 
           {/* 測定一覧（共通パネル） */}
