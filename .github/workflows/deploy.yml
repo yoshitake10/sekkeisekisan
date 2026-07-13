@@ -1,0 +1,60 @@
+name: Deploy to GitHub Pages
+
+# 作業ブランチ（＝現在のデフォルトブランチ）または main への push、
+# もしくは手動実行でビルドし、GitHub Pages へ公開する。
+#
+# 【初回のみ】リポジトリの Settings → Pages →
+#   「Build and deployment」の Source を「GitHub Actions」に設定してください。
+#   （Pages サイトの新規作成は自動実行の権限では行えないため手動設定が必要です）
+on:
+  push:
+    branches:
+      - claude/hvac-design-tool-g8ob9l
+      - main
+  workflow_dispatch:
+
+# GitHub Pages への公開に必要な権限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 公開は同時に1つだけ（進行中があれば待つ）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
