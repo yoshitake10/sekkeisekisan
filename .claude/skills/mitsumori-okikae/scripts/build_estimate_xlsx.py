@@ -17,6 +17,12 @@ build_estimate_xlsx.py — 明細JSON（extract_estimate_pdf.py の出力）を�
                          --round-mode round(四捨五入) | up(切上げ) | down(切捨て)
     数式は  売価 = 端数処理( 原価 × 掛率 ÷ (100 − 粗利率) ÷ 単位 ) × 単位
 
+値引き行（ヒアリング項目）:
+    省略            : 元見積の値引き行にも同じ粗利率・掛率を掛ける（比例配分）
+    --discount 150000 : 自社の値引き額を ▲150,000 に固定（数式ではなく数値。元見積の値引きは原価側 R 列に残す）
+    --discount 0      : 値引き行を載せない（元見積の値引きは合計行の O 列に原価調整として残す）
+    --discount-name 出精値引 : 行の名称（--discount 指定時）
+
 レイアウト:
     明細が 16 行以内 → 表紙の明細欄に直接記入（テンプレートと同じ使い方）
     それ以上         → 表紙は区分ごとの集計行、明細は新設する「内訳(工事)」シートに全行記入
@@ -227,6 +233,8 @@ class Line:
     remarks: str = ""
     group_start: bool = False
     group_name: str = ""
+    is_discount: bool = False              # 値引き行（マイナス金額 or 名称に「値引」）
+    fixed_amount: Optional[float] = None   # 値引き行を任意の金額（売価側・マイナス）で固定するとき
 
 
 def normalize_indent(name: str) -> str:
@@ -275,14 +283,45 @@ def make_lines(data: dict, keep_numbering: bool) -> tuple[Optional[str], list[Li
         name = raw.get("name") or raw.get("spec") or ""
         cleaned = clean_item_name(name, keep_numbering)
         amt = raw.get("amount")
-        starts = bool(NUM_PREFIX_RE.match(name)) or (amt is not None and amt < 0) or ("値引" in name) or not out
+        is_disc = (amt is not None and amt < 0) or ("値引" in name)
+        starts = bool(NUM_PREFIX_RE.match(name)) or is_disc or not out
         spec = raw.get("spec") or ""
         if raw.get("name") and spec:
             cleaned = f"{cleaned}　{spec.strip()}"
         out.append(Line("item", name=cleaned, qty=raw.get("qty"), unit=raw.get("unit") or "",
                         unit_price=raw.get("unit_price"), amount=amt, remarks=raw.get("remarks") or "",
-                        group_start=starts, group_name=cleaned.strip(" 　")))
+                        group_start=starts, group_name=cleaned.strip(" 　"), is_discount=is_disc))
     return title, out
+
+
+def apply_discount_rule(lines: list[Line], discount: Optional[float], discount_name: str):
+    """値引き行の扱い（ヒアリング結果を反映する）。戻り値: (lines, 合計行の原価調整額, 情報)
+
+    discount None : 元見積の値引き行に他の行と同じ粗利率・掛率を掛ける（比例配分）
+    discount 0    : 自社見積に値引き行を載せない。元見積の値引きは原価としてだけ残す（合計行の O 列）
+    discount X>0  : 自社の値引き額を X 円に固定（▲X 表示）。元見積の値引きは原価側（R 列）に残す。
+                    元見積に値引き行が無ければ末尾に追加する
+    """
+    targets = [i for i, ln in enumerate(lines) if ln.kind == "item" and ln.is_discount]
+    vendor = sum(lines[i].amount or 0 for i in targets)
+    if discount is None:
+        return lines, 0, {"mode": "keep", "vendor_discount": vendor}
+    if discount == 0:
+        kept = [ln for i, ln in enumerate(lines) if i not in targets]
+        return kept, vendor, {"mode": "none", "vendor_discount": vendor, "amount": 0}
+    amount = -abs(discount)
+    amount = int(amount) if float(amount).is_integer() else amount
+    if targets:
+        # 複数あれば最後の行を自社の値引き行にし、元見積の値引きは合算して原価側に残す
+        last = targets[-1]
+        ln = lines[last]
+        ln.fixed_amount, ln.name, ln.group_name, ln.amount = amount, discount_name, discount_name, vendor
+        ln.unit_price, ln.qty, ln.unit = None, 1, "式"
+        kept = [l for i, l in enumerate(lines) if i not in targets[:-1]]
+        return kept, 0, {"mode": "fixed", "amount": amount, "vendor_discount": vendor}
+    new = Line("item", name=discount_name, qty=1, unit="式", amount=0, fixed_amount=amount,
+               group_start=True, group_name=discount_name, is_discount=True)
+    return lines + [new], 0, {"mode": "fixed", "amount": amount, "vendor_discount": 0}
 
 
 @dataclass
@@ -328,6 +367,14 @@ def item_row_values(ctx: Ctx, r: int, ln: Line, seq: int) -> tuple[dict, dict]:
     v: dict = {}
     v["A"] = ("n", seq) if ctx.detail_numbering else ("s", CIRCLED[seq - 1] if seq <= len(CIRCLED) else str(seq))
     v["B"] = ("s", ln.name)
+    if ln.fixed_amount is not None:
+        # 任意の値引き額: 数式ではなく数値をそのまま置く（粗利率・掛率・端数処理の影響を受けない）
+        v["G"], v["H"], v["K"] = ("n", 1), ("s", ln.unit or "式"), ("n", ln.fixed_amount)
+        v["N"] = ("f", f"G{r}", 1)
+        v["R"] = ("n", cost_amt)
+        v["Q"] = ("f", f"K{r}-R{r}", ln.fixed_amount - cost_amt)
+        v["S"] = ("s", "値引き額は直接入力（R列は元見積の値引き）")
+        return v, {"sell": ln.fixed_amount, "cost": cost_amt}
     v["G"] = ("n", qty) if qty is not None else None
     v["H"] = ("s", ln.unit)
     v["M"] = ("f", f"{ctx.set_prefix}${SET_COL_VALUE}${SET_ROW_MARGIN}", p.margin_pct)
@@ -352,12 +399,18 @@ def item_row_values(ctx: Ctx, r: int, ln: Line, seq: int) -> tuple[dict, dict]:
 
 
 def total_row_values(r: int, first: int, last: int, sell: float, cost: float, label: str = "　合　　計",
-                     sheet_prefix: str = "") -> dict:
-    v = {"B": ("s", label),
-         "K": ("f", f"SUM({sheet_prefix}K{first}:K{last})", sell),
-         "R": ("f", f"SUM({sheet_prefix}R{first}:R{last})", cost),
-         "Q": ("f", f"K{r}-R{r}", sell - cost),
-         "M": ("f", f"IF(K{r}=0,0,(K{r}-R{r})/K{r}*100)", 0 if not sell else (sell - cost) / sell * 100)}
+                     cost_adjust: float = 0, adjust_spec=None) -> dict:
+    """合計行。cost_adjust があれば O 列に置き（元見積の値引きを自社見積に載せないときの原価調整）、R 列に足す"""
+    v = {"B": ("s", label), "K": ("f", f"SUM(K{first}:K{last})", sell)}
+    if cost_adjust:
+        v["O"] = adjust_spec or ("n", cost_adjust)
+        v["R"] = ("f", f"SUM(R{first}:R{last})+O{r}", cost + cost_adjust)
+        v["S"] = ("s", "O列＝元見積の値引き（原価調整）")
+        cost = cost + cost_adjust
+    else:
+        v["R"] = ("f", f"SUM(R{first}:R{last})", cost)
+    v["Q"] = ("f", f"K{r}-R{r}", sell - cost)
+    v["M"] = ("f", f"IF(K{r}=0,0,(K{r}-R{r})/K{r}*100)", 0 if not sell else (sell - cost) / sell * 100)
     return v
 
 
@@ -466,7 +519,7 @@ def build_cover(sh: SheetXml, ctx: Ctx, title_text: str, body_rows, total_row_va
 
 
 def build_detail_sheet(ctx: Ctx, cover_xml: str, sheet_name: str, title_text: str, lines: list[Line],
-                       customer: str, no_value, work_title: str):
+                       customer: str, no_value, work_title: str, cost_adjust: float = 0):
     """内訳(工事) シートの XML を組み立てる。戻り値: (xml, line_row, total_row, totals)"""
     st = ctx.styles
     cols_xml = re.search(r"<cols>.*?</cols>", cover_xml, re.S).group(0)
@@ -503,7 +556,8 @@ def build_detail_sheet(ctx: Ctx, cover_xml: str, sheet_name: str, title_text: st
         rows_xml.append(make_row(r, st[arch], vals, ROW_HEIGHT[arch]))
         merges += [f"I{r}:J{r}", f"S{r}:T{r}"]
     total_row = first + 1 + len(body)
-    tv = total_row_values(total_row, first, total_row - 1, totals["sell"], totals["cost"])
+    tv = total_row_values(total_row, first, total_row - 1, totals["sell"], totals["cost"], cost_adjust=cost_adjust)
+    totals["cost"] += cost_adjust
     rows_xml.append(make_row(total_row, st["last"], tv, ROW_HEIGHT["total"]))
     merges += [f"I{total_row}:J{total_row}", f"S{total_row}:T{total_row}"]
 
@@ -655,11 +709,15 @@ def main() -> None:
     ap.add_argument("--layout", choices=["auto", "cover", "detail"], default="auto")
     ap.add_argument("--detail-sheet-name", default=DETAIL_SHEET_DEFAULT)
     ap.add_argument("--keep-numbering", action="store_true", help="元見積の「1）」等の番号を名称に残す")
+    ap.add_argument("--discount", type=float, default=None,
+                    help="値引き行の金額（円・正の数で指定、▲表示）。0 = 値引き行を載せない。省略時は元見積の値引きに同じ粗利率・掛率を掛ける")
+    ap.add_argument("--discount-name", default="値引き", help="--discount 指定時の値引き行の名称（例: 出精値引）")
     a = ap.parse_args()
 
     pricing = Pricing(a.margin_pct, a.markup_pct, max(1, a.round_unit), a.round_mode)
     data = json.load(open(a.lines, encoding="utf-8"))
     pdf_title, lines = make_lines(data, a.keep_numbering)
+    lines, cost_adjust, discount_info = apply_discount_rule(lines, a.discount, a.discount_name)
     if not lines:
         raise SystemExit("明細がありません")
     work_title = a.title or pdf_title or ""
@@ -697,14 +755,17 @@ def main() -> None:
         total_row = FIRST_ROW + 1 + len(body)
         if total_row > LAST_FREE_ROW:
             raise SystemExit(f"明細 {len(lines)} 行は表紙に収まりません。--layout detail を指定してください")
-        tv = total_row_values(total_row, FIRST_ROW, total_row - 1, totals["sell"], totals["cost"])
+        tv = total_row_values(total_row, FIRST_ROW, total_row - 1, totals["sell"], totals["cost"],
+                              cost_adjust=cost_adjust)
+        totals["cost"] += cost_adjust
         build_cover(cover, ctx, cover_title, body, tv, total_row, ref_rows=(total_row + 5 <= LAST_FREE_ROW),
                     cost_total=totals["cost"])
         parts[cover_part] = cover.xml.encode("utf-8")
     else:
         dctx = Ctx(pricing, f"'{COVER_SHEET}'!", styles, tags, detail_numbering=True)
         sheet_xml, line_row, dtotal_row, totals = build_detail_sheet(
-            dctx, cover.xml, a.detail_sheet_name, cover_title, lines, customer, no_value, work_title)
+            dctx, cover.xml, a.detail_sheet_name, cover_title, lines, customer, no_value, work_title,
+            cost_adjust=cost_adjust)
         groups = make_groups(lines)
         max_groups = LAST_FREE_ROW - FIRST_ROW - 1  # タイトル行と合計行を除いた行数
         if len(groups) > max_groups:
@@ -740,7 +801,9 @@ def main() -> None:
             }
             body.append((r, "item", vals))
         total_row = FIRST_ROW + 1 + len(body)
-        tv = total_row_values(total_row, FIRST_ROW, total_row - 1, sell_total, cost_total)
+        tv = total_row_values(total_row, FIRST_ROW, total_row - 1, sell_total, cost_total, cost_adjust=cost_adjust,
+                              adjust_spec=("f", f"{dq}O{dtotal_row}", cost_adjust) if cost_adjust else None)
+        cost_total += cost_adjust
         cctx = Ctx(pricing, "", styles, tags)
         build_cover(cover, cctx, cover_title, body, tv, total_row, ref_rows=(total_row + 5 <= LAST_FREE_ROW),
                     cost_total=cost_total)
@@ -775,6 +838,7 @@ def main() -> None:
         "out": a.out, "sell_total": totals["sell"], "cost_total": totals["cost"],
         "margin_pct": pricing.margin_pct, "markup_pct": pricing.markup_pct, "round_unit": pricing.unit, "round_mode": pricing.mode,
         "customer": customer, "title": work_title, "cover_title": cover_title, "cover_total_row": total_row,
+        "discount": discount_info,
     })
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
