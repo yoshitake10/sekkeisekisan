@@ -1,6 +1,6 @@
 {
   "name": "サンプル案件",
-  "clientName": "○○様",
+  "clientName": "○○株式会社",
   "siteName": "○○ビル",
   "buildingUsage": "事務所",
   "totalFloorAreaM2": 286.04,
@@ -34,7 +34,7 @@
   "estimate": {
     "mode": "detail",
     "title": "空調換気設備工事 御見積書",
-    "clientName": "○○様",
+    "clientName": "○○株式会社",
     "honorific": "御中",
     "companyName": "宮地機工",
     "companyAddress": "",
