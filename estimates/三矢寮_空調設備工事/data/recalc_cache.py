@@ -13,8 +13,9 @@ cache = {}
 
 
 def xl_round(x, n=0):
-    if x == "":
+    if isinstance(x, Blank) or x == "":
         return ""
+    x = float(x)
     m = 10 ** n
     return math.floor(abs(x) * m + 0.5) / m * (1 if x >= 0 else -1) if n < 0 else round(x + 0.0, n) if False else \
         (math.floor(abs(x) * m + 0.5) / m) * (1 if x >= 0 else -1)
@@ -35,6 +36,7 @@ def xl_floor(x, s):
 
 
 def xl_text(v, fmt):
+    if isinstance(v, Blank): v = 0
     if fmt == "#,##0":
         return f"{int(round(v)):,}"
     if fmt == "0%":
@@ -65,6 +67,40 @@ def SUM(*args):
     return t
 
 
+def SUMPRODUCT(a, b):
+    t = 0
+    for x, y in zip(a.vals, b.vals):
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+            t += x * y
+    return t
+
+
+class Blank:
+    """空セル: 算術では 0、比較では "" とも 0 とも等しい（Excel の挙動に合わせる）"""
+    def __eq__(self, o): return o == "" or o == 0 or isinstance(o, Blank)
+    def __ne__(self, o): return not self.__eq__(o)
+    def __bool__(self): return False
+    def __float__(self): return 0.0
+    def __add__(self, o): return o if isinstance(o, str) else 0 + o
+    __radd__ = __add__
+    def __sub__(self, o): return 0 - o
+    def __rsub__(self, o): return o - 0
+    def __mul__(self, o): return 0
+    __rmul__ = __mul__
+    def __truediv__(self, o): return 0 / o
+    def __rtruediv__(self, o): raise ZeroDivisionError
+    def __neg__(self): return 0
+    def __lt__(self, o): return 0 < o
+    def __gt__(self, o): return 0 > o
+    def __le__(self, o): return 0 <= o
+    def __ge__(self, o): return 0 >= o
+    def __str__(self): return ""
+    def __hash__(self): return 0
+
+
+BLANK = Blank()
+
+
 def cell_value(sheet, ref):
     ref = ref.replace("$", "")
     key = (sheet, ref)
@@ -78,7 +114,7 @@ def cell_value(sheet, ref):
     elif isinstance(v, datetime.datetime):
         v = (v - datetime.datetime(1899, 12, 30)).days
     elif v is None:
-        v = ""
+        v = BLANK
     cache[key] = v
     return v
 
@@ -125,7 +161,7 @@ def evaluate(sheet, expr):
     e = re.sub(r"\bOR\(", "xl_or(", e)
     e = re.sub(r"\bAND\(", "xl_and(", e)
     env = dict(__RNG__=lambda sh, r: rng_values(sh, r), __CELL__=lambda sh, r: cell_value(sh, r),
-               SUM=SUM, xl_round=xl_round, xl_roundup=xl_roundup, xl_rounddown=xl_rounddown,
+               SUM=SUM, SUMPRODUCT=SUMPRODUCT, xl_round=xl_round, xl_roundup=xl_roundup, xl_rounddown=xl_rounddown,
                xl_floor=xl_floor, xl_if=xl_if, xl_text=xl_text,
                xl_or=lambda *a: any(a), xl_and=lambda *a: all(a))
 
@@ -142,10 +178,16 @@ def _eval_num(e, env):
     # 文字列演算('+'連結)以外は数値変換して再評価する
     try:
         return eval(e, {"__builtins__": {}}, env)
+    except ZeroDivisionError:
+        # IF() は Python では両枝を評価するため、0除算は Excel 上は未選択枝とみなし "" を返す
+        return ""
     except TypeError:
         env2 = dict(env)
         env2["__CELL__"] = lambda sh, r: num(cell_value(sh, r))
-        return eval(e, {"__builtins__": {}}, env2)
+        try:
+            return eval(e, {"__builtins__": {}}, env2)
+        except ZeroDivisionError:
+            return ""
 
 
 values = {}
@@ -153,7 +195,8 @@ for ws in wb.worksheets:
     for row in ws.iter_rows():
         for c in row:
             if isinstance(c.value, str) and c.value.startswith("="):
-                values[(ws.title, c.coordinate)] = cell_value(ws.title, c.coordinate)
+                val = cell_value(ws.title, c.coordinate)
+                values[(ws.title, c.coordinate)] = "" if isinstance(val, Blank) else val
 
 sheet_files = {ws.title: f"xl/worksheets/sheet{i+1}.xml" for i, ws in enumerate(wb.worksheets)}
 tmp = path + ".tmp"

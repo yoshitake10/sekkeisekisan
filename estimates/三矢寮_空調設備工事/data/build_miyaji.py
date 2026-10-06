@@ -27,6 +27,7 @@ from openpyxl.workbook.defined_name import DefinedName  # noqa: E402
 from openpyxl.worksheet.pagebreak import Break  # noqa: E402
 from openpyxl.worksheet.properties import PageSetupProperties  # noqa: E402
 import math  # noqa: E402
+import pricing_v2 as PV  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(HERE))
 import importlib.util  # noqa: E402
@@ -87,7 +88,7 @@ KINDS = {
     ),
 }
 
-G = dict(coef_default=1.10, overhead_rate=0.08, rounding_unit=10000, labor_day_cost_ref=27000)
+G = dict(coef_default=PV.COEF, overhead_rate=PV.OVERHEAD, rounding_unit=PV.ROUND_UNIT, labor_day_cost=PV.LABOR_DAY_COST, labor_day_list=PV.LABOR_DAY_LIST)
 WELFARE_RATES = [
     ('健康保険料', 0.04890, '健康保険料率 9.780%（協会けんぽ 広島県 令和8年度）×1/2（労使折半）'),
     ('介護保険料', 0.00810, '介護保険料率 1.620%（全国一律 令和8年度）×1/2（労使折半）'),
@@ -157,7 +158,7 @@ def to_lines(keys):
     out = []
     for k in keys:
         for (kb, name, spec, qty, unit, price, basis, note) in ITEMS[k]:
-            mat, lab = split_cost(name, spec, price)
+            mat, md, ref, src = PV.price(k, name, spec, unit, price)
             pub = PUBLIC_REMARK.get(basis, '')
             txt = name + spec
             if ('支給品' in txt or '元請支給' in txt) and '支給外' not in txt:
@@ -166,7 +167,7 @@ def to_lines(keys):
                 pub = pub or '本体は元請様支給'
             elif '減額' in note or '(中止)' in name:
                 pub = pub or '図面08 中止に伴う減額'
-            out.append(dict(section=k, name=name, spec=spec, qty=qty, unit=unit, mat=mat, lab=lab,
+            out.append(dict(section=k, name=name, spec=spec, qty=qty, unit=unit, mat=mat, md=md, ref=ref, src=src,
                             basis=basis, memo=note, pub=pub, red=(kb == '08')))
     return out
 
@@ -227,13 +228,13 @@ def build_detail(ws, cfg):
     lines = to_lines(section_keys)
     color = C_RED if red else None
     set_widths(ws, dict(A=4, B=27, C=24, D=4, E=8, F=5, G=10, H=13, I=15,
-                        J=10, K=10, L=10, M=7, N=12, O=12, P=8, Q=12, R=8, S=40))
+                        J=10, K=7, L=10, M=10, N=7, O=12, P=12, Q=9, R=12, S=8, T=11, U=8, V=40))
     merge(ws, 'A1:I1')
     put(ws, 'A1', '内　訳　書', size=16, bold=True, h='center', color=color)
-    merge(ws, 'J1:S1')
+    merge(ws, 'J1:V1')
     put(ws, 'J1', '原　価　内　訳　書（内部用・印刷範囲外）', size=11, bold=True, h='center',
         color=C_GRAYTXT, fill=FILL_G)
-    fill_range(ws, 'J1:S1', FILL_G)
+    fill_range(ws, 'J1:V1', FILL_G)
     ws.row_dimensions[1].height = 26
     put(ws, 'A2', '工事名：' + PROJECT_FULL + '　' + KIND_LABEL[0], color=color)
     put(ws, 'I2', f'内訳書 No.{no}', h='right', color=color)
@@ -244,9 +245,9 @@ def build_detail(ws, cfg):
                      ('G3', '単　価'), ('H3', '金　　額'), ('I3', '備　考')]:
         put(ws, ref, txt, h='center', fill=FILL_G)
     fill_range(ws, 'A3:I3', FILL_G)
-    for ref, txt in [('J3', '材料単価'), ('K3', '労務単価'), ('L3', '基準単価'), ('M3', '提出係数'),
-                     ('N3', '基準原価'), ('O3', '労務費(提出)'), ('P3', '数量根拠'), ('Q3', '粗利'),
-                     ('R3', '粗利率'), ('S3', '前提・メモ（内部）')]:
+    for ref, txt in [('J3', '材料原価'), ('K3', '人工/単位'), ('L3', '労務原価'), ('M3', '基準原価単価'), ('N3', '提出係数'),
+                     ('O3', '基準原価'), ('P3', '労務費(提出)'), ('Q3', '数量根拠'), ('R3', '粗利'),
+                     ('S3', '粗利率'), ('T3', '参考定価ベース'), ('U3', '当社/参考'), ('V3', '単価出典・メモ（内部）')]:
         put(ws, ref, txt, size=9, h='center', fill=FILL_G, color=C_GRAYTXT, shrink=True)
     ws.row_dimensions[3].height = 20
     merge(ws, 'A4:I4')
@@ -273,21 +274,24 @@ def build_detail(ws, cfg):
         put(ws, f'C{r}', ln['spec'] or None, size=10, shrink=True, indent=1, color=color)
         put(ws, f'E{r}', ln['qty'], size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
         put(ws, f'F{r}', ln['unit'], size=10, h='center', color=color)
-        put(ws, f'G{r}', f'=IF(L{r}="","",ROUND(L{r}*M{r},-1))', size=10, h='right', fmt=FMT_AMT, color=color)
+        put(ws, f'G{r}', f'=IF(M{r}="","",ROUND(M{r}*N{r},-1))', size=10, h='right', fmt=FMT_AMT, color=color)
         put(ws, f'H{r}', f'=IF(G{r}="","",ROUND(E{r}*G{r},0))', size=10, h='right',
             fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
         put(ws, f'I{r}', ln['pub'] or None, size=10, h='center', shrink=True, color=color)
         put(ws, f'J{r}', ln['mat'], size=10, h='right', fmt=FMT_AMT, fill=FILL_Y)
-        put(ws, f'K{r}', ln['lab'], size=10, h='right', fmt=FMT_AMT, fill=FILL_Y)
-        put(ws, f'L{r}', f'=J{r}+K{r}', size=10, h='right', fmt=FMT_AMT)
-        put(ws, f'M{r}', '=COEF', size=10, h='center', fmt='0.00', fill=FILL_Y)
-        put(ws, f'N{r}', f'=E{r}*L{r}', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-        put(ws, f'O{r}', f'=ROUND(E{r}*K{r}*M{r},0)', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-        put(ws, f'P{r}', ln['basis'], size=9, h='center', shrink=True,
+        put(ws, f'K{r}', ln['md'], size=10, h='right', fmt='0.00', fill=FILL_Y)
+        put(ws, f'L{r}', f'=ROUND(K{r}*LABOR_DAY,0)', size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'M{r}', f'=J{r}+L{r}', size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'N{r}', '=COEF', size=10, h='center', fmt='0.00', fill=FILL_Y)
+        put(ws, f'O{r}', f'=E{r}*M{r}', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+        put(ws, f'P{r}', f'=ROUND(E{r}*L{r}*N{r},0)', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+        put(ws, f'Q{r}', ln['basis'], size=9, h='center', shrink=True,
             fill=(FILL_RED if ln['basis'] == '推測' else None))
-        put(ws, f'Q{r}', f'=IF(H{r}="","",H{r}-N{r})', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-        put(ws, f'R{r}', f'=IF(OR(H{r}="",H{r}=0),"",Q{r}/H{r})', size=10, h='right', fmt='0.0%')
-        put(ws, f'S{r}', ln['memo'] or None, size=9)
+        put(ws, f'R{r}', f'=IF(H{r}="","",H{r}-O{r})', size=10, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+        put(ws, f'S{r}', f'=IF(OR(H{r}="",H{r}=0),"",R{r}/H{r})', size=10, h='right', fmt='0.0%')
+        put(ws, f'T{r}', (round(ln['ref']) if ln['ref'] else None), size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'U{r}', (f'=IF(OR(T{r}="",T{r}=0),"",G{r}/T{r})' if ln['ref'] else None), size=10, h='right', fmt='0%')
+        put(ws, f'V{r}', ((ln['src'] + '｜' if ln['src'] else '') + (ln['memo'] or '')) or None, size=9)
         ws.row_dimensions[r].height = 18
         if long_name:
             ws.row_dimensions[r].height = max(18, row_h(est_lines(name_txt, 31, 10), 10))
@@ -302,17 +306,18 @@ def build_detail(ws, cfg):
     merge(ws, f'A{sub}:D{sub}')
     put(ws, f'A{sub}', '【小　　計】', bold=True, h='center', color=color)
     put(ws, f'H{sub}', f'=SUM(H6:H{blank})', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
-    put(ws, f'N{sub}', f'=SUM(N6:N{blank})', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
     put(ws, f'O{sub}', f'=SUM(O6:O{blank})', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-    put(ws, f'Q{sub}', f'=H{sub}-N{sub}', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-    put(ws, f'R{sub}', f'=IF(H{sub}=0,"",Q{sub}/H{sub})', bold=True, h='right', fmt='0.0%')
+    put(ws, f'P{sub}', f'=SUM(P6:P{blank})', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+    put(ws, f'K{sub}', f'=SUMPRODUCT(E6:E{blank},K6:K{blank})', bold=True, h='right', fmt='#,##0.0')
+    put(ws, f'R{sub}', f'=H{sub}-O{sub}', bold=True, h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+    put(ws, f'S{sub}', f'=IF(H{sub}=0,"",R{sub}/H{sub})', bold=True, h='right', fmt='0.0%')
     ws.row_dimensions[sub].height = 22
     grid(ws, f'A3:I{sub}', outer='medium', vert='thin', horiz='hair')
-    grid(ws, f'J3:S{sub}', outer='thin', vert='thin', horiz='hair')
-    for rng in ('A3:I3', 'J3:S3'):
+    grid(ws, f'J3:V{sub}', outer='thin', vert='thin', horiz='hair')
+    for rng in ('A3:I3', 'J3:V3'):
         hline(ws, rng, 'bottom', 'thin')
     hline(ws, f'A{sub}:I{sub}', 'top', 'medium')
-    hline(ws, f'J{sub}:S{sub}', 'top', 'medium')
+    hline(ws, f'J{sub}:V{sub}', 'top', 'medium')
     for c in range(1, 10):
         set_border(ws.cell(sub, c), bottom='medium')
     set_border(ws.cell(sub, 1), left='medium')
@@ -366,7 +371,7 @@ def build_welfare(ws, details):
     fill_range(ws, 'B12:G12', FILL_G)
     rows1 = []
     for i, d in enumerate(details):
-        rows1.append((13 + i, d['cfg']['labor'], f"={q(d['cfg']['sheet'])}!O{d['sub']}",
+        rows1.append((13 + i, d['cfg']['labor'], f"={q(d['cfg']['sheet'])}!P{d['sub']}",
                       f"内訳書 No.{d['cfg']['no']} 各項目の労務費相当額の合計"))
     tot_row = 13 + len(details)
     rows1.append((tot_row, '労 務 費 合 計', f'=SUM(C13:C{tot_row - 1})', '← 法定福利費の算定基礎額'))
@@ -523,7 +528,7 @@ def build_cover(ws, details, wf, kind):
         rows.append((FIRST + i, CIRC[i], d['cfg']['cover'], f"={q(d['cfg']['sheet'])}!H{d['sub']}",
                      f"内訳書 No.{d['cfg']['no']}", C_RED if d['cfg']['red'] else None))
     rows.append((WF_ROW, CIRC[n], '法定福利費（労務費に係る事業主負担分）', f"={q(SH_WF)}!{wf['amount_cell']}", '別紙明細書', None))
-    rows.append((OH_ROW, CIRC[n + 1], '諸経費', f'=ROUND(SUM(K{FIRST}:K{WF_ROW - 1})*OVERHEAD_RATE,-3)',
+    rows.append((OH_ROW, CIRC[n + 1], '諸経費（現場経費・資材運搬・工事諸経費）', f'=ROUND(SUM(K{FIRST}:K{WF_ROW - 1})*OVERHEAD_RATE,-3)',
                  f'="{CIRC[0]}〜{CIRC[n - 1]}計の"&TEXT(OVERHEAD_RATE,"0%")', None))
     for r, no, name, fk, remark, color in rows:
         put(ws, f'A{r}', no, h='center', color=color)
@@ -534,7 +539,7 @@ def build_cover(ws, details, wf, kind):
         put(ws, f'K{r}', fk, h='right', fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
         put(ws, f'L{r}', remark, size=10, h='center', shrink=True, color=color)
     put(ws, f'B{DISC_ROW}', '出精値引き', indent=1)
-    put(ws, f'K{DISC_ROW}', f'=FLOOR(SUM(K{FIRST}:K{OH_ROW}),ROUND_UNIT)-SUM(K{FIRST}:K{OH_ROW})', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+    put(ws, f'K{DISC_ROW}', f'=IF(TARGET="",FLOOR(SUM(K{FIRST}:K{OH_ROW}),ROUND_UNIT)-SUM(K{FIRST}:K{OH_ROW}),TARGET-SUM(K{FIRST}:K{OH_ROW}))', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
     put(ws, f'L{DISC_ROW}', '端数調整', size=10, h='center')
     put(ws, f'B{TOTAL_ROW}', '　合　　計', bold=True, indent=1)
     put(ws, f'K{TOTAL_ROW}', f'=SUM(K{FIRST}:K{DISC_ROW})', bold=True, h='right', fmt=FMT_AMT)
@@ -566,17 +571,19 @@ def build_cover(ws, details, wf, kind):
     put(ws, 'M3', '【設定・内部用】（印刷範囲外）', bold=True, color=C_GRAYTXT, fill=FILL_G)
     put(ws, 'N3', None, fill=FILL_G)
     params = [
-        (4, '提出係数（基準原価→提出単価）', G['coef_default'], '0.00', True),
-        (5, '諸経費率', G['overhead_rate'], '0%', True),
-        (6, '端数処理単位', G['rounding_unit'], '#,##0', True),
+        (4, '提出係数（原価→定価ベース単価）', G['coef_default'], '0.00', True),
+        (5, '諸経費率（現場経費・運搬・雑材・工事諸経費）', G['overhead_rate'], '0%', True),
+        (6, '出精値引き 丸め単位（目標額空欄時）', G['rounding_unit'], '#,##0', True),
         (7, '法定福利費率（労務費比）', '=WELFARE_RATE', '0.000%', False),
-        (8, '参考：労務単価（円/人工）', G['labor_day_cost_ref'], '#,##0', True),
+        (8, '労務原価日額（円/人工）', G['labor_day_cost'], '#,##0', True),
+        (9, '目標提出額（税別・空欄なら丸め）', None, '#,##0', True),
+        (10, '参考：宮地機工 人工単価（定価ベース）', G['labor_day_list'], '#,##0', False),
     ]
     for rr, lab, val, fmt, is_input in params:
         put(ws, f'M{rr}', lab, size=10, color=C_GRAYTXT, fill=FILL_G, shrink=True)
         put(ws, f'N{rr}', val, h='right', fmt=fmt, fill=(FILL_Y if is_input else None))
-    grid(ws, 'M3:N8', outer='thin', vert='thin', horiz='thin')
-    put(ws, 'M9', '※ 粗利率を変えたい場合は提出係数 N4 を変更（例 1.25 → 粗利率 20%）。行ごとに変える場合は内訳書の M列', size=9, color=C_GRAYTXT)
+    grid(ws, 'M3:N10', outer='thin', vert='thin', horiz='thin')
+    put(ws, 'M11', '※ 原価＝材料原価＋人工×N8。提出単価＝原価×N4（1.22で参考見積の人工単価23,225に一致）。目標提出額 N9 を入れると出精値引きで合わせる', size=9, color=C_GRAYTXT)
     for ref, txt in [('M19', '内部集計（原価・粗利）'), ('N19', '基準原価'), ('O19', '労務費(提出)'),
                      ('P19', '粗利'), ('Q19', '粗利率')]:
         put(ws, ref, txt, size=10, h='center', color=C_GRAYTXT, fill=FILL_G, shrink=True)
@@ -584,16 +591,17 @@ def build_cover(ws, details, wf, kind):
         rr = FIRST + i
         put(ws, f'M{rr}', CIRC[i] + d['cfg']['short'], size=10)
         sh = d['cfg']['sheet']
-        put(ws, f'N{rr}', f"={q(sh)}!N{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-        put(ws, f'O{rr}', f"={q(sh)}!O{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+        put(ws, f'N{rr}', f"={q(sh)}!O{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+        put(ws, f'O{rr}', f"={q(sh)}!P{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
         put(ws, f'P{rr}', f'=K{rr}-N{rr}', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
         put(ws, f'Q{rr}', f'=IF(K{rr}=0,"",P{rr}/K{rr})', h='right', fmt='0.0%')
     put(ws, f'M{WF_ROW}', CIRC[n] + '法定福利費（原価＝提出値）', size=10, shrink=True)
     put(ws, f'N{WF_ROW}', f'=K{WF_ROW}', h='right', fmt=FMT_AMT)
     put(ws, f'M{OH_ROW}', CIRC[n + 1] + '諸経費（原価計上なし）', size=10, shrink=True)
     put(ws, f'N{OH_ROW}', 0, h='right', fmt=FMT_AMT)
-    put(ws, f'M{DISC_ROW}', '出精値引き（粗利から控除）', size=10, shrink=True)
+    put(ws, f'M{DISC_ROW}', '出精値引き（原価なし・粗利から控除）', size=10, shrink=True)
     put(ws, f'N{DISC_ROW}', 0, h='right', fmt=FMT_AMT)
+    put(ws, f'P{DISC_ROW}', f'=K{DISC_ROW}', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
     put(ws, f'M{TOTAL_ROW}', '合計（原価合計／粗利／粗利率）', size=10, bold=True, shrink=True)
     put(ws, f'N{TOTAL_ROW}', f'=SUM(N{FIRST}:N{DISC_ROW})', bold=True, h='right', fmt=FMT_AMT)
     put(ws, f'O{TOTAL_ROW}', f'=SUM(O{FIRST}:O{DISC_ROW})', h='right', fmt=FMT_AMT)
@@ -812,6 +820,45 @@ def checks_for(kind):
     return out
 
 
+def build_master(ws):
+    set_widths(ws, dict(A=14, B=12, C=9, D=12, E=12, F=14, G=14, H=10, I=70))
+    put(ws, 'A1', '単価マスタ（内部）　原価＝材料原価＋人工×労務原価日額、提出（定価ベース）＝原価×提出係数。参考列は宮地機工 参考見積8件（2025.11〜2026.10）から整理', size=10, bold=True)
+    put(ws, 'A2', f'労務原価日額 {PV.LABOR_DAY_COST:,} 円/人工　参考見積の人工単価 {PV.LABOR_DAY_LIST:,} 円/人工（6330476-3 配管工費 40人工 929,000）　提出係数 {PV.COEF}　材料係数 ×{PV.MAT_FACTOR}（継手30%＋消耗15%＋支持金物40%）', size=9)
+    hdr = ['キー', '材料原価', '人工', '労務原価', '原価', '提出(定価ベース)', '参考定価ベース', '当社/参考', '出典・根拠']
+    for i, h in enumerate(hdr, 1):
+        put(ws, f'{chr(64 + i)}4', h, size=10, bold=True, h='center', fill=FILL_G)
+    r = 5
+    for k, (mat, md, ref, src) in PV.MASTER.items():
+        put(ws, f'A{r}', k, size=10)
+        put(ws, f'B{r}', mat, size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'C{r}', md, size=10, h='right', fmt='0.00')
+        put(ws, f'D{r}', f'=ROUND(C{r}*LABOR_DAY,0)', size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'E{r}', f'=IF(B{r}="","",B{r}+D{r})', size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'F{r}', f'=IF(E{r}="","",ROUND(E{r}*COEF,-1))', size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'G{r}', (round(ref) if ref else None), size=10, h='right', fmt=FMT_AMT)
+        put(ws, f'H{r}', (f'=IF(OR(G{r}="",F{r}=""),"",F{r}/G{r})' if ref else None), size=10, h='right', fmt='0%')
+        put(ws, f'I{r}', src, size=9)
+        r += 1
+    grid(ws, f'A4:I{r - 1}', outer='thin', vert='thin', horiz='hair')
+    r += 1
+    put(ws, f'A{r}', '参考見積の経費構造', size=10, bold=True, fill=FILL_L)
+    rows = [('部門内経費', '消耗品及び雑材料 2.6%＋資材運搬交通費 3.5%＋現場経費 7.4% ＝ 15.7%（据付・撤去）／ 3.0%＋4.1%＋8.6% ＝ 19.0%（配管・ダクト・電気）'),
+            ('工事諸経費', '直接工事費の 5.0%'),
+            ('出精値引', '6330247-1 18.4%／6330248-2 35.1%／6330284-1 14.8%／6330539 26.8%／6330549 22.3%／6330558 12.0%／6330476-3 9.9%／6330344-1 24.9%'),
+            ('法定福利費', '労務費×16.04%（金額内含で注記）。当社は別項目で 16.375%（令和8年度）'),
+            ('据付単価', '搬入据付 21,700/台（6330476-3 11台）・27,860/台（6330558 VRV）・25,000/台（6330284-1 GHP 24台）・12,500/組（6330539 RA）・12,900/台（6330344-1 天吊）'),
+            ('配管', '冷媒 9.52+15.88 4,025/m・9.52+25.40 5,475・12.70+25.40 5,675（10t×2）、ペアコイル 6.35+9.52 988、VP25 313/m・VP13 138/m、配管工費 4.6〜5 m/人工（冷媒）・9〜12 m/人工（塩ビ）'),
+            ('その他', 'リモコン配線 9,630/系統、試運転 10,000〜12,500/系統、気密 15,000〜25,000、真空引き 3,750〜5,640、揚重 93,750〜337,500/式、撤去 18,000〜19,500/台、冷媒回収 18,750〜31,250/式、VVF 203/m・電線施工 約500/m')]
+    for a, b in rows:
+        r += 1
+        put(ws, f'A{r}', a, size=10, bold=True)
+        merge(ws, f'B{r}:I{r}')
+        put(ws, f'B{r}', b, size=9, wrap=True)
+        ws.row_dimensions[r].height = 28
+    page_setup(ws, f'A1:I{r}', fit_h=0)
+    ws.page_setup.orientation = 'landscape'
+
+
 def build_book(kind):
     KIND_LABEL[0] = kind['label']
     wb = Workbook()
@@ -827,18 +874,22 @@ def build_book(kind):
     ws_wf = wb.create_sheet(SH_WF)
     ws_cd = wb.create_sheet(SH_COND)
     ws_bs = wb.create_sheet('数量拾い根拠(内部)')
+    ws_pm = wb.create_sheet('単価マスタ(内部)')
 
     details = [build_detail(ws, cfg) for ws, cfg in zip(ws_details, kind['details'])]
     wf = build_welfare(ws_wf, details)
     cv = build_cover(ws_cover, details, wf, kind)
     cd = build_conditions(ws_cd, details, kind)
     build_basis(ws_bs, kind)
+    build_master(ws_pm)
 
     names = {
         'COEF': f"{q(SH_COVER)}!$N$4",
         'OVERHEAD_RATE': f"{q(SH_COVER)}!$N$5",
         'ROUND_UNIT': f"{q(SH_COVER)}!$N$6",
         'WELFARE_RATE': f"{q(SH_WF)}!{wf['rate_cell']}",
+        'LABOR_DAY': f"{q(SH_COVER)}!$N$8",
+        'TARGET': f"{q(SH_COVER)}!$N$9",
     }
     for k, ref in names.items():
         wb.defined_names[k] = DefinedName(k, attr_text=ref)
