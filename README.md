@@ -45,7 +45,10 @@ npm run build    # 本番ビルド (dist/ に静的ファイル生成)
 npm run preview  # ビルド結果の確認
 ```
 
-ビルド成果物（`dist/`）は静的ファイルのみなので、社内ファイルサーバーやイントラのWebサーバーに置くだけで利用できます。データはブラウザ（localStorage）に自動保存され、案件ごとにJSONで書出し/読込みできます。
+ビルド成果物（`dist/`）は静的ファイルのみ（`index.html` とJS 1本）なので、社内ファイルサーバーやイントラのWebサーバーに置くだけで利用できます。
+ファイルサーバー上の `index.html` をダブルクリックして開く（`file://`）場合でも、画面表示・PDF図面の読み込みとも動作します。データはブラウザ（localStorage）に自動保存され、案件ごとにJSONで書出し/読込みできます。
+
+公開版（GitHub Pages）: https://yoshitake10.github.io/sekkeisekisan/
 
 ## 技術構成
 

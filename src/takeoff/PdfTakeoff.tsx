@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
+import pdfWorkerCode from 'pdfjs-dist/build/pdf.worker.min.mjs?raw'
 import { useActiveProject, useStore } from '../store'
 import type { DrawingMeta, MeasureKind, Measurement, TakeoffPoint } from '../types'
 import { genId } from '../utils/id'
@@ -18,10 +19,14 @@ import {
   newPlotMeasurement,
 } from './plot'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString()
+// PDF.js ワーカーの起動。
+// 以前はワーカーを別ファイル(pdf.worker.min.mjs)として出力しURLで指していたが、
+// dist/ をファイルサーバーから file:// で直接開いた場合、Worker の読込みが
+// ブラウザにブロックされ PDF が表示できなかった。ワーカーのコードを本体に
+// 同梱して Blob URL から起動することで、http(s) でも file:// でも動作する。
+pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+  new Blob([pdfWorkerCode], { type: 'text/javascript' }),
+)
 
 const MIN_ZOOM = 0.05
 const MAX_ZOOM = 12
