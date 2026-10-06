@@ -33,7 +33,6 @@ import importlib.util  # noqa: E402
 _spec = importlib.util.spec_from_file_location("src_items", os.path.join(os.path.dirname(HERE), "build_estimate.py"))
 
 OUT_DIR = sys.argv[1] if len(sys.argv) > 1 else HERE
-OUT_FILE = os.path.join(OUT_DIR, '御見積書_三矢寮新築工事_空調設備工事_20261005.xlsx')
 
 # =====================================================================
 # 案件情報
@@ -46,7 +45,7 @@ SITE = '広島県安芸高田市吉田町西浦字日南山835-27'
 TERM = '全体工期 2026年5月1日～2027年2月15日（空調工事は工程表による・別途お打ち合わせ）'
 PAYMENT = '別途お打ち合わせ'
 VALIDITY = '発行後3ヶ月'
-EST_DATE = datetime.date(2026, 10, 5)
+EST_DATE = datetime.date(2026, 10, 6)
 DATE_FMT = 'yyyy"年"m"月"d"日"'
 COMPANY = '宮地機工株式会社'
 REP = '代表取締役　濱本　義樹'
@@ -57,11 +56,36 @@ FAX = 'FAX.0848-20-2126'
 STAFF = '濱本　義武'
 
 SH_COVER = '表紙(工事)'
-SH_D1 = '内訳書(1.空調工事)'
-SH_D2 = '内訳書(2.換気工事)'
-SH_D3 = '内訳書(3.金額変更案)'
 SH_WF = '法定福利費内訳明細書'
 SH_COND = '御見積条件'
+
+# 見積書の種類（空調工事／換気工事で別ブック）。各ブック = ベース図面06 ＋ 追加図面08（朱書き）
+KINDS = {
+    'ac': dict(
+        label='空調工事', file='御見積書_三矢寮新築工事_空調工事_20261006.xlsx',
+        project2='空調工事（機械設備図06ベース＋金額変更案08 空調追加）',
+        details=[
+            dict(sheet='内訳書(1.空調工事)', no=1, heading='１．空調工事（機械設備図 06）', keys=['A1', 'A2', 'A3', 'A4'],
+                 red=False, cover='空調工事（機械設備図 06）', short='空調工事', labor='空調工事 労務費'),
+            dict(sheet='内訳書(2.空調追加)', no=2, heading='２．金額変更案 No5・6 空調追加（検討図 08 朱書き）', keys=['C2'],
+                 red=True, cover='金額変更案 No5・6 空調追加（検討図 08）', short='空調追加', labor='空調追加 労務費'),
+        ],
+        cover_note='［空調機器（空調機器表・追加分 PA-P140U7GTNB・PA-P224L7HTNB）は元請様手配、電気工事・建築工事・自動制御は含まず］',
+        basis_tables=[0, 1, 2, 4],
+    ),
+    'vent': dict(
+        label='換気工事', file='御見積書_三矢寮新築工事_換気工事_20261006.xlsx',
+        project2='換気工事（機械設備図06ベース＋金額変更案08 ロスナイ中止）',
+        details=[
+            dict(sheet='内訳書(1.換気工事)', no=1, heading='１．換気工事（機械設備図 06）', keys=['B1', 'B2', 'B3', 'B4', 'B5'],
+                 red=False, cover='換気工事（機械設備図 06）', short='換気工事', labor='換気工事 労務費'),
+            dict(sheet='内訳書(2.ロスナイ中止)', no=2, heading='２．金額変更案 No3・4 ロスナイ中止（検討図 08 朱書き・減額は負数表示）', keys=['C1'],
+                 red=True, cover='金額変更案 No3・4 ロスナイ中止（検討図 08・減額・代替機器）', short='ロスナイ中止', labor='ロスナイ中止・代替 労務費'),
+        ],
+        cover_note='［換気機器（換気機器表・代替分 BFS-SUDC・V-08PPXD8）は元請様手配、電気工事・建築工事・自動制御は含まず］',
+        basis_tables=[3, 4],
+    ),
+}
 
 G = dict(coef_default=1.10, overhead_rate=0.08, rounding_unit=10000, labor_day_cost_ref=27000)
 WELFARE_RATES = [
@@ -74,6 +98,7 @@ WELFARE_RATES = [
 ]
 
 C_RED = 'C00000'
+CIRC = '①②③④⑤⑥⑦⑧⑨'
 FILL_RED = PatternFill('solid', fgColor='FDE9E9')
 
 
@@ -197,7 +222,8 @@ NOTES = {
 # =====================================================================
 # 内訳書
 # =====================================================================
-def build_detail(ws, no, heading, section_keys, red=False):
+def build_detail(ws, cfg):
+    no, heading, section_keys, red = cfg['no'], cfg['heading'], cfg['keys'], cfg['red']
     lines = to_lines(section_keys)
     color = C_RED if red else None
     set_widths(ws, dict(A=4, B=27, C=24, D=4, E=8, F=5, G=10, H=13, I=15,
@@ -209,7 +235,7 @@ def build_detail(ws, no, heading, section_keys, red=False):
         color=C_GRAYTXT, fill=FILL_G)
     fill_range(ws, 'J1:S1', FILL_G)
     ws.row_dimensions[1].height = 26
-    put(ws, 'A2', '工事名：' + PROJECT_FULL, color=color)
+    put(ws, 'A2', '工事名：' + PROJECT_FULL + '　' + KIND_LABEL[0], color=color)
     put(ws, 'I2', f'内訳書 No.{no}', h='right', color=color)
     ws.row_dimensions[2].height = 18
     merge(ws, 'A3:B3')
@@ -292,7 +318,7 @@ def build_detail(ws, no, heading, section_keys, red=False):
     set_border(ws.cell(sub, 1), left='medium')
     set_border(ws.cell(sub, 9), right='medium')
     page_setup(ws, f'A1:I{sub}', fit_h=0, title_rows='1:3', footer='&P / &N')
-    return dict(first=6, last=last, blank=blank, sub=sub, lines=lines, wrapped=wrapped)
+    return dict(first=6, last=last, blank=blank, sub=sub, lines=lines, wrapped=wrapped, cfg=cfg)
 
 
 # =====================================================================
@@ -338,61 +364,69 @@ def build_welfare(ws, details):
     merge(ws, 'E12:G12')
     put(ws, 'E12', '摘　　要', h='center', fill=FILL_G)
     fill_range(ws, 'B12:G12', FILL_G)
-    rows1 = [(13, '空調工事 労務費', f"={q(SH_D1)}!O{details[0]['sub']}", '内訳書 No.1 各項目の労務費相当額の合計'),
-             (14, '換気工事 労務費', f"={q(SH_D2)}!O{details[1]['sub']}", '内訳書 No.2 各項目の労務費相当額の合計'),
-             (15, '金額変更案 労務費', f"={q(SH_D3)}!O{details[2]['sub']}", '内訳書 No.3 各項目の労務費相当額の合計'),
-             (16, '労 務 費 合 計', '=SUM(C13:C15)', '← 法定福利費の算定基礎額')]
+    rows1 = []
+    for i, d in enumerate(details):
+        rows1.append((13 + i, d['cfg']['labor'], f"={q(d['cfg']['sheet'])}!O{d['sub']}",
+                      f"内訳書 No.{d['cfg']['no']} 各項目の労務費相当額の合計"))
+    tot_row = 13 + len(details)
+    rows1.append((tot_row, '労 務 費 合 計', f'=SUM(C13:C{tot_row - 1})', '← 法定福利費の算定基礎額'))
     for r, lab, f, memo in rows1:
-        bold = (r == 16)
+        bold = (r == tot_row)
         put(ws, f'B{r}', lab, bold=bold, h=('center' if bold else None), indent=(0 if bold else 1))
         merge(ws, f'C{r}:D{r}')
         put(ws, f'C{r}', f, bold=bold, h='right', fmt=FMT_AMT)
         merge(ws, f'E{r}:G{r}')
         put(ws, f'E{r}', memo, size=10, bold=bold, indent=1)
-    for r in range(12, 17):
+    for r in range(12, tot_row + 1):
         ws.row_dimensions[r].height = 20
-    grid(ws, 'B12:G16', outer='medium', vert='thin', horiz='thin')
-    hline(ws, 'B16:G16', 'top', 'double')
+    grid(ws, f'B12:G{tot_row}', outer='medium', vert='thin', horiz='thin')
+    hline(ws, f'B{tot_row}:G{tot_row}', 'top', 'double')
     for c in range(2, 8):
-        set_border(ws.cell(16, c), bottom='medium')
-    ws.row_dimensions[17].height = 10
-    put(ws, 'B18', '【2】　法定福利費の算定', bold=True)
-    ws.row_dimensions[18].height = 20
-    merge(ws, 'B19:G19')
-    put(ws, 'B19', '計算式：　法定福利費 ＝ 労務費 × 事業主負担料率　（保険ごとに円未満切捨て）', size=10)
-    ws.row_dimensions[19].height = 18
-    put(ws, 'B20', '保険の種類', h='center', fill=FILL_G)
-    merge(ws, 'C20:D20')
-    put(ws, 'C20', '対象労務費（円）', size=10, h='center', fill=FILL_G)
-    put(ws, 'E20', '事業主負担料率', size=10, h='center', fill=FILL_G)
-    put(ws, 'F20', '法定福利費（円）', size=10, h='center', fill=FILL_G)
-    put(ws, 'G20', '算定根拠', h='center', fill=FILL_G)
-    fill_range(ws, 'B20:G20', FILL_G)
-    ws.row_dimensions[20].height = 22
-    r = 21
+        set_border(ws.cell(tot_row, c), bottom='medium')
+    r = tot_row + 1
+    ws.row_dimensions[r].height = 10
+    r += 1
+    put(ws, f'B{r}', '【2】　法定福利費の算定', bold=True)
+    ws.row_dimensions[r].height = 20
+    r += 1
+    merge(ws, f'B{r}:G{r}')
+    put(ws, f'B{r}', '計算式：　法定福利費 ＝ 労務費 × 事業主負担料率　（保険ごとに円未満切捨て）', size=10)
+    ws.row_dimensions[r].height = 18
+    r += 1
+    hdr2 = r
+    put(ws, f'B{r}', '保険の種類', h='center', fill=FILL_G)
+    merge(ws, f'C{r}:D{r}')
+    put(ws, f'C{r}', '対象労務費（円）', size=10, h='center', fill=FILL_G)
+    put(ws, f'E{r}', '事業主負担料率', size=10, h='center', fill=FILL_G)
+    put(ws, f'F{r}', '法定福利費（円）', size=10, h='center', fill=FILL_G)
+    put(ws, f'G{r}', '算定根拠', h='center', fill=FILL_G)
+    fill_range(ws, f'B{r}:G{r}', FILL_G)
+    ws.row_dimensions[r].height = 22
+    r += 1
+    labor_cell = f'$C${tot_row}'
     for name, rate, basis in WELFARE_RATES:
         put(ws, f'B{r}', name, indent=1)
         merge(ws, f'C{r}:D{r}')
-        put(ws, f'C{r}', '=$C$16', h='right', fmt=FMT_AMT)
+        put(ws, f'C{r}', f'={labor_cell}', h='right', fmt=FMT_AMT)
         put(ws, f'E{r}', rate, h='right', fmt='0.000%_ ')
         put(ws, f'F{r}', f'=ROUNDDOWN(C{r}*E{r},0)', h='right', fmt=FMT_AMT)
         put(ws, f'G{r}', basis, size=9, wrap=True)
         ws.row_dimensions[r].height = max(22, row_h(est_lines(basis, 31, 9), 9, pad=5))
         r += 1
-    wf_first, wf_last = 21, r - 1
+    wf_first, wf_last = hdr2 + 1, r - 1
     tot = r
     put(ws, f'B{tot}', '合　　計', bold=True, h='center')
     merge(ws, f'C{tot}:D{tot}')
     put(ws, f'E{tot}', f'=SUM(E{wf_first}:E{wf_last})', bold=True, h='right', fmt='0.000%_ ')
     put(ws, f'F{tot}', f'=SUM(F{wf_first}:F{wf_last})', bold=True, h='right', fmt=FMT_AMT)
     ws.row_dimensions[tot].height = 24
-    grid(ws, f'B20:G{tot}', outer='medium', vert='thin', horiz='thin')
+    grid(ws, f'B{hdr2}:G{tot}', outer='medium', vert='thin', horiz='thin')
     hline(ws, f'B{tot}:G{tot}', 'top', 'double')
     for c in range(2, 8):
         set_border(ws.cell(tot, c), bottom='medium')
     ws.row_dimensions[tot + 1].height = 10
     notes = ['※ 料率は見積作成時点（令和8年度）の公表料率によります。料率が改定された場合は改定後の料率により精算させていただきます。',
-             '※ 法定福利費は御見積書の④に計上しています。']
+             f'※ 法定福利費は御見積書の{CIRC[len(details)]}に計上しています。']
     r = tot + 2
     for t in notes:
         merge(ws, f'B{r}:G{r}')
@@ -401,14 +435,18 @@ def build_welfare(ws, details):
         r += 1
     last = r - 1
     page_setup(ws, f'B1:G{last}', fit_h=1)
-    return dict(labor_total='C16', total_row=tot, rate_cell=f'$E${tot}', amount_cell=f'F{tot}')
+    return dict(labor_total=labor_cell, total_row=tot, rate_cell=f'$E${tot}', amount_cell=f'F{tot}')
 
 
 # =====================================================================
 # 表紙(工事)
 # =====================================================================
-def build_cover(ws, details, wf):
-    d1, d2, d3 = details
+def build_cover(ws, details, wf, kind):
+    n = len(details)
+    FIRST = 22
+    WF_ROW = FIRST + n
+    OH_ROW = WF_ROW + 1
+    DISC_ROW = OH_ROW + 2
     set_widths(ws, dict(A=6, B=8, C=3, D=15, E=9, F=9, G=7, H=5, I=7, J=7, K=14, L=12,
                         M=26, N=12, O=12, P=12, Q=9, R=12, S=12))
     merge(ws, 'A1:L2')
@@ -429,7 +467,7 @@ def build_cover(ws, details, wf):
     put(ws, 'G5', '御中', size=12, h='left')
     ws.row_dimensions[5].height = 26
     ws.row_dimensions[6].height = 12
-    TOTAL_ROW = 29
+    TOTAL_ROW = DISC_ROW + 1
     put(ws, 'A7', '金額', size=12, h='center')
     merge(ws, 'B7:E7')
     put(ws, 'B7', f'="¥"&TEXT(K{TOTAL_ROW},"#,##0")&"-"', size=14, bold=True, h='center')
@@ -449,7 +487,7 @@ def build_cover(ws, details, wf):
     put(ws, 'D12', PROJECT_1, shrink=True)
     put(ws, 'H12', ADDR)
     merge(ws, 'D13:G13')
-    put(ws, 'D13', PROJECT_2, shrink=True)
+    put(ws, 'D13', kind['project2'], shrink=True)
     put(ws, 'H13', TEL)
     put(ws, 'K13', FAX)
     merge(ws, 'A14:B14')
@@ -474,19 +512,19 @@ def build_cover(ws, details, wf):
         put(ws, ref, txt, size=sz, h='center', fill=FILL_G, shrink=True)
     fill_range(ws, 'A19:L19', FILL_G)
     merge(ws, 'B20:L20')
-    put(ws, 'B20', '【' + PROJECT_FULL + '】', indent=1, shrink=True)
+    put(ws, 'B20', '【' + PROJECT_FULL + '　' + kind['label'] + '】', indent=1, shrink=True)
     merge(ws, 'B21:L21')
-    put(ws, 'B21', '［機器（空調機器表・換気機器表記載分）は元請様手配、電気工事・建築工事・自動制御は含まず］', size=10, indent=1, shrink=True)
+    put(ws, 'B21', kind['cover_note'], size=10, indent=1, shrink=True)
     for r in range(22, TOTAL_ROW + 1):
         merge(ws, f'B{r}:F{r}')
         merge(ws, f'I{r}:J{r}')
-    rows = [
-        (22, '①', '空調工事（機械設備図 06）', f"={q(SH_D1)}!H{d1['sub']}", '内訳書 No.1', None),
-        (23, '②', '換気工事（機械設備図 06）', f"={q(SH_D2)}!H{d2['sub']}", '内訳書 No.2', None),
-        (24, '③', '金額変更案（検討図 08　No3・4 ロスナイ中止／No5・6 空調追加）', f"={q(SH_D3)}!H{d3['sub']}", '内訳書 No.3', C_RED),
-        (25, '④', '法定福利費（労務費に係る事業主負担分）', f"={q(SH_WF)}!{wf['amount_cell']}", '別紙明細書', None),
-        (26, '⑤', '諸経費', '=ROUND((K22+K23+K24)*OVERHEAD_RATE,-3)', '="①〜③計の"&TEXT(OVERHEAD_RATE,"0%")', None),
-    ]
+    rows = []
+    for i, d in enumerate(details):
+        rows.append((FIRST + i, CIRC[i], d['cfg']['cover'], f"={q(d['cfg']['sheet'])}!H{d['sub']}",
+                     f"内訳書 No.{d['cfg']['no']}", C_RED if d['cfg']['red'] else None))
+    rows.append((WF_ROW, CIRC[n], '法定福利費（労務費に係る事業主負担分）', f"={q(SH_WF)}!{wf['amount_cell']}", '別紙明細書', None))
+    rows.append((OH_ROW, CIRC[n + 1], '諸経費', f'=ROUND(SUM(K{FIRST}:K{WF_ROW - 1})*OVERHEAD_RATE,-3)',
+                 f'="{CIRC[0]}〜{CIRC[n - 1]}計の"&TEXT(OVERHEAD_RATE,"0%")', None))
     for r, no, name, fk, remark, color in rows:
         put(ws, f'A{r}', no, h='center', color=color)
         put(ws, f'B{r}', name, indent=1, shrink=True, color=color)
@@ -495,11 +533,11 @@ def build_cover(ws, details, wf):
         put(ws, f'I{r}', f'=K{r}', h='right', fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
         put(ws, f'K{r}', fk, h='right', fmt='#,##0_ ;[Red]-#,##0_ ', color=color)
         put(ws, f'L{r}', remark, size=10, h='center', shrink=True, color=color)
-    put(ws, 'B28', '出精値引き', indent=1)
-    put(ws, 'K28', '=FLOOR(SUM(K22:K26),ROUND_UNIT)-SUM(K22:K26)', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
-    put(ws, 'L28', '端数調整', size=10, h='center')
+    put(ws, f'B{DISC_ROW}', '出精値引き', indent=1)
+    put(ws, f'K{DISC_ROW}', f'=FLOOR(SUM(K{FIRST}:K{OH_ROW}),ROUND_UNIT)-SUM(K{FIRST}:K{OH_ROW})', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
+    put(ws, f'L{DISC_ROW}', '端数調整', size=10, h='center')
     put(ws, f'B{TOTAL_ROW}', '　合　　計', bold=True, indent=1)
-    put(ws, f'K{TOTAL_ROW}', '=SUM(K22:K28)', bold=True, h='right', fmt=FMT_AMT)
+    put(ws, f'K{TOTAL_ROW}', f'=SUM(K{FIRST}:K{DISC_ROW})', bold=True, h='right', fmt=FMT_AMT)
     put(ws, f'L{TOTAL_ROW}', '（税別）', size=10, h='center')
     for r in range(19, TOTAL_ROW + 1):
         ws.row_dimensions[r].height = 24
@@ -511,7 +549,12 @@ def build_cover(ws, details, wf):
         set_border(ws.cell(TOTAL_ROW, c), bottom='medium')
     ws.row_dimensions[TOTAL_ROW + 1].height = 12
     r = TOTAL_ROW + 2
-    for t in list(NOTES['cover']) + ['詳細条件は別紙「御見積条件」をご参照ください。']:
+    cover_notes = [t.replace('金額変更案検討図（図面No.08）による追加・変更は内訳書 No.3（朱書き）に計上しています。',
+                             ('金額変更案検討図（図面No.08）の No5・6 空調追加は内訳書 No.2（朱書き）に計上しています。換気工事は別途御見積書によります。'
+                              if kind['label'] == '空調工事' else
+                              '金額変更案検討図（図面No.08）の No3・4 ロスナイ中止は内訳書 No.2（朱書き）に減額・代替機器を計上しています。空調工事は別途御見積書によります。'))
+                   for t in NOTES['cover']]
+    for t in cover_notes + ['詳細条件は別紙「御見積条件」をご参照ください。']:
         put(ws, f'A{r}', '※', size=9.5, h='center', v='top')
         merge(ws, f'B{r}:L{r}')
         put(ws, f'B{r}', t, size=9.5, wrap=True, v='top')
@@ -537,22 +580,23 @@ def build_cover(ws, details, wf):
     for ref, txt in [('M19', '内部集計（原価・粗利）'), ('N19', '基準原価'), ('O19', '労務費(提出)'),
                      ('P19', '粗利'), ('Q19', '粗利率')]:
         put(ws, ref, txt, size=10, h='center', color=C_GRAYTXT, fill=FILL_G, shrink=True)
-    for rr, lab, d in [(22, '①空調工事', d1), (23, '②換気工事', d2), (24, '③金額変更案', d3)]:
-        put(ws, f'M{rr}', lab, size=10)
-        sh = {22: SH_D1, 23: SH_D2, 24: SH_D3}[rr]
+    for i, d in enumerate(details):
+        rr = FIRST + i
+        put(ws, f'M{rr}', CIRC[i] + d['cfg']['short'], size=10)
+        sh = d['cfg']['sheet']
         put(ws, f'N{rr}', f"={q(sh)}!N{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
         put(ws, f'O{rr}', f"={q(sh)}!O{d['sub']}", h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
         put(ws, f'P{rr}', f'=K{rr}-N{rr}', h='right', fmt='#,##0_ ;[Red]-#,##0_ ')
         put(ws, f'Q{rr}', f'=IF(K{rr}=0,"",P{rr}/K{rr})', h='right', fmt='0.0%')
-    put(ws, 'M25', '④法定福利費（原価＝提出値）', size=10, shrink=True)
-    put(ws, 'N25', '=K25', h='right', fmt=FMT_AMT)
-    put(ws, 'M26', '⑤諸経費（原価計上なし）', size=10, shrink=True)
-    put(ws, 'N26', 0, h='right', fmt=FMT_AMT)
-    put(ws, 'M28', '出精値引き（粗利から控除）', size=10, shrink=True)
-    put(ws, 'N28', 0, h='right', fmt=FMT_AMT)
+    put(ws, f'M{WF_ROW}', CIRC[n] + '法定福利費（原価＝提出値）', size=10, shrink=True)
+    put(ws, f'N{WF_ROW}', f'=K{WF_ROW}', h='right', fmt=FMT_AMT)
+    put(ws, f'M{OH_ROW}', CIRC[n + 1] + '諸経費（原価計上なし）', size=10, shrink=True)
+    put(ws, f'N{OH_ROW}', 0, h='right', fmt=FMT_AMT)
+    put(ws, f'M{DISC_ROW}', '出精値引き（粗利から控除）', size=10, shrink=True)
+    put(ws, f'N{DISC_ROW}', 0, h='right', fmt=FMT_AMT)
     put(ws, f'M{TOTAL_ROW}', '合計（原価合計／粗利／粗利率）', size=10, bold=True, shrink=True)
-    put(ws, f'N{TOTAL_ROW}', '=SUM(N22:N28)', bold=True, h='right', fmt=FMT_AMT)
-    put(ws, f'O{TOTAL_ROW}', '=SUM(O22:O28)', h='right', fmt=FMT_AMT)
+    put(ws, f'N{TOTAL_ROW}', f'=SUM(N{FIRST}:N{DISC_ROW})', bold=True, h='right', fmt=FMT_AMT)
+    put(ws, f'O{TOTAL_ROW}', f'=SUM(O{FIRST}:O{DISC_ROW})', h='right', fmt=FMT_AMT)
     put(ws, f'P{TOTAL_ROW}', f'=K{TOTAL_ROW}-N{TOTAL_ROW}', bold=True, h='right', fmt=FMT_AMT)
     put(ws, f'Q{TOTAL_ROW}', f'=IF(K{TOTAL_ROW}=0,"",P{TOTAL_ROW}/K{TOTAL_ROW})', bold=True, h='right', fmt='0.0%')
     grid(ws, f'M19:Q{TOTAL_ROW}', outer='thin', vert='thin', horiz='hair')
@@ -565,7 +609,7 @@ def build_cover(ws, details, wf):
         rr = 33 + i
         put(ws, f'M{rr}', rate, h='center', fmt='"粗利率 "0%')
         put(ws, f'N{rr}', f'=ROUNDUP($N${TOTAL_ROW}/(1-M{rr}),-4)', h='right', fmt=FMT_AMT)
-        put(ws, f'O{rr}', f'=IF(SUM($N$22:$N$24)=0,"",ROUND(($N${TOTAL_ROW}/(1-M{rr})-$N$25-$K$26)/SUM($N$22:$N$24),3))',
+        put(ws, f'O{rr}', f'=IF(SUM($N${FIRST}:$N${WF_ROW - 1})=0,"",ROUND(($N${TOTAL_ROW}/(1-M{rr})-$N${WF_ROW}-$K${OH_ROW})/SUM($N${FIRST}:$N${WF_ROW - 1}),3))',
             h='right', fmt='0.000')
     grid(ws, 'M32:O37', outer='thin', vert='thin', horiz='thin')
     put(ws, 'M38', '※ 必要提出係数は諸経費を現状額に固定した場合の目安', size=9, color=C_GRAYTXT)
@@ -576,20 +620,20 @@ def build_cover(ws, details, wf):
 # =====================================================================
 # 御見積条件
 # =====================================================================
-def build_conditions(ws, details):
+def build_conditions(ws, details, kind):
     W = dict(A=5, B=10, C=25, D=20, E=16, F=19)
     set_widths(ws, W)
     BF = W['B'] + W['C'] + W['D'] + W['E'] + W['F']
     put(ws, 'A1', '御見積条件・注意事項', size=14, bold=True)
     ws.row_dimensions[1].height = 24
-    put(ws, 'A2', PROJECT_FULL + '　御見積書 添付', size=10)
+    put(ws, 'A2', PROJECT_FULL + '　' + kind['label'] + '　御見積書 添付', size=10)
     ws.row_dimensions[2].height = 16
     ws.row_dimensions[3].height = 8
     r = 4
     put(ws, f'A{r}', '【1】御見積条件・注意事項', size=12, bold=True)
     ws.row_dimensions[r].height = 22
     r += 1
-    for i, t in enumerate(NOTES['conditions'], 1):
+    for i, t in enumerate(conditions_for(kind), 1):
         put(ws, f'A{r}', f'{i}.', h='right', v='top')
         merge(ws, f'B{r}:F{r}')
         put(ws, f'B{r}', t, wrap=True, v='top')
@@ -617,7 +661,8 @@ def build_conditions(ws, details):
     ws.row_dimensions[r].height = 20
     r += 1
     k = 0
-    for no, d in (('No.1', details[0]), ('No.2', details[1]), ('No.3', details[2])):
+    for d in details:
+        no = f"No.{d['cfg']['no']}"
         for ln in d['lines']:
             if ln['basis'] not in ('推測', '実測+推測') or not ln['memo']:
                 continue
@@ -640,7 +685,7 @@ def build_conditions(ws, details):
     put(ws, f'A{r}', '【3】図面読み取りに関する確認事項', size=12, bold=True)
     ws.row_dimensions[r].height = 22
     r += 1
-    for i, t in enumerate(NOTES['checks'], 1):
+    for i, t in enumerate(checks_for(kind), 1):
         put(ws, f'A{r}', f'{i}.', h='right', v='top')
         merge(ws, f'B{r}:F{r}')
         put(ws, f'B{r}', t, wrap=True, v='top')
@@ -710,11 +755,13 @@ BASIS_TABLES = [
 ]
 
 
-def build_basis(ws):
+def build_basis(ws, kind):
     set_widths(ws, dict(A=36, B=18, C=12, D=12, E=12, F=12, G=12, H=60))
     put(ws, 'A1', '数量拾い根拠（内部用）　※計測方法: PDF図面(A3 1:300、厨房詳細 1:70)のベクトル線分を色・線幅で分離し延長を集計。「実測」=図面線分の平面延長、「推測」=図面に無い部分の推定', size=10, bold=True)
     r = 3
-    for title, headers, rows in BASIS_TABLES:
+    for ti, (title, headers, rows) in enumerate(BASIS_TABLES):
+        if ti not in kind['basis_tables']:
+            continue
         put(ws, f'A{r}', title, bold=True, fill=FILL_L)
         r += 1
         for i, h in enumerate(headers):
@@ -733,31 +780,59 @@ def build_basis(ws):
 
 
 # =====================================================================
-def main():
+KIND_LABEL = ['']
+
+
+def conditions_for(kind):
+    base = NOTES['conditions']
+    if kind['label'] == '空調工事':
+        drop = ('ロスナイ', '吸気口', 'フード①')
+        repl = {base[1]: base[1].replace('No3・4（ロスナイ中止）および No5・6（空調追加）を内訳書 No.3 に朱書きで計上しています。ロスナイ中止はベース計上分の減額と代替機器（中間ファン・パイプファン・吸気口）の計上を併記しています。',
+                                         'No5・6（空調追加 追AC1〜5）を内訳書 No.2 に朱書きで計上しています。No3・4（ロスナイ中止）は換気工事の見積書に計上しています。')}
+    else:
+        drop = ('冷媒管は', '追加空調', '追加充填', 'ドレン管の保温')
+        repl = {base[1]: base[1].replace('No3・4（ロスナイ中止）および No5・6（空調追加）を内訳書 No.3 に朱書きで計上しています。ロスナイ中止はベース計上分の減額と代替機器（中間ファン・パイプファン・吸気口）の計上を併記しています。',
+                                         'No3・4（ロスナイ中止）を内訳書 No.2 に朱書きで計上しています。ベース計上分の減額と代替機器（中間ファン・パイプファン・吸気口）の計上を併記しています。No5・6（空調追加）は空調工事の見積書に計上しています。')}
+    out = []
+    for t in base:
+        if any(k in t for k in drop):
+            continue
+        out.append(repl.get(t, t))
+    return out
+
+
+def checks_for(kind):
+    base = NOTES['checks']
+    if kind['label'] == '空調工事':
+        drop = ('換気平面図', 'SUS製フード', '吸気口')
+        out = [t.replace('（冷媒管＝黒線、ドレン管＝青線）および換気平面図のダクト線（排気＝黒太線、給気＝青線）', '（冷媒管＝黒線、ドレン管＝青線）') for t in base if not any(k in t for k in drop)]
+    else:
+        drop = ('RAC-3', '追AC', '区画貫通')
+        out = [t.replace('空調平面図の配管線（冷媒管＝黒線、ドレン管＝青線）および換気平面図のダクト線', '換気平面図のダクト線') for t in base if not any(k in t for k in drop)]
+    return out
+
+
+def build_book(kind):
+    KIND_LABEL[0] = kind['label']
     wb = Workbook()
     base = fnt(11)
     wb._fonts = IndexedList([base])
     wb._named_styles['Normal'].font = base
     wb.properties.creator = COMPANY
-    wb.properties.title = '御見積書 ' + PROJECT_FULL
+    wb.properties.title = '御見積書 ' + PROJECT_FULL + ' ' + kind['label']
 
     ws_cover = wb.active
     ws_cover.title = SH_COVER
-    ws_d1 = wb.create_sheet(SH_D1)
-    ws_d2 = wb.create_sheet(SH_D2)
-    ws_d3 = wb.create_sheet(SH_D3)
+    ws_details = [wb.create_sheet(d['sheet']) for d in kind['details']]
     ws_wf = wb.create_sheet(SH_WF)
     ws_cd = wb.create_sheet(SH_COND)
     ws_bs = wb.create_sheet('数量拾い根拠(内部)')
 
-    d1 = build_detail(ws_d1, 1, '１．空調工事（機械設備図 06）', ['A1', 'A2', 'A3', 'A4'])
-    d2 = build_detail(ws_d2, 2, '２．換気工事（機械設備図 06）', ['B1', 'B2', 'B3', 'B4', 'B5'])
-    d3 = build_detail(ws_d3, 3, '３．金額変更案（検討図 08 朱書き・減額は負数表示）', ['C1', 'C2'], red=True)
-    details = [d1, d2, d3]
+    details = [build_detail(ws, cfg) for ws, cfg in zip(ws_details, kind['details'])]
     wf = build_welfare(ws_wf, details)
-    cv = build_cover(ws_cover, details, wf)
-    cd = build_conditions(ws_cd, details)
-    build_basis(ws_bs)
+    cv = build_cover(ws_cover, details, wf, kind)
+    cd = build_conditions(ws_cd, details, kind)
+    build_basis(ws_bs, kind)
 
     names = {
         'COEF': f"{q(SH_COVER)}!$N$4",
@@ -771,10 +846,14 @@ def main():
     for ws in wb.worksheets:
         ws.sheet_view.tabSelected = (ws.title == SH_COVER)
     wb.calculation.fullCalcOnLoad = True
-    wb.save(OUT_FILE)
-    info = dict(out=OUT_FILE, d1={k: v for k, v in d1.items() if k != 'lines'},
-                d2={k: v for k, v in d2.items() if k != 'lines'}, d3={k: v for k, v in d3.items() if k != 'lines'},
-                welfare=wf, cover=cv, conditions=cd, names=names)
+    out = os.path.join(OUT_DIR, kind['file'])
+    wb.save(out)
+    return dict(out=out, details=[{k: v for k, v in d.items() if k not in ('lines', 'cfg')} for d in details],
+                welfare=wf, cover=cv, conditions=cd)
+
+
+def main():
+    info = {k: build_book(v) for k, v in KINDS.items()}
     print(json.dumps(info, ensure_ascii=False, indent=1))
 
 
