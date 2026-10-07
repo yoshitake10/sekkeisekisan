@@ -38,9 +38,14 @@ def xl_floor(x, s):
 def xl_text(v, fmt):
     if isinstance(v, Blank): v = 0
     if fmt == "#,##0":
-        return f"{int(round(v)):,}"
+        return f"{int(xl_round(v, 0)):,}"
     if fmt == "0%":
-        return f"{int(round(v * 100))}%"
+        return f"{int(xl_round(v * 100, 0))}%"
+    if fmt == "0.0%":
+        return f"{xl_round(v * 100, 1):.1f}%"
+    if fmt in ("0.0", "0.00", "0.000"):
+        n = len(fmt) - 2
+        return f"{xl_round(v, n):.{n}f}"
     return str(v)
 
 

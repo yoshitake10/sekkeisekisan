@@ -11,7 +11,7 @@ import tempfile
 
 from openpyxl import load_workbook
 
-INTERNAL = ('数量拾い根拠(内部)', '単価マスタ(内部)')
+INTERNAL = ('数量拾い根拠(内部)', '単価マスタ(内部)', 'エスト比較(内部)', 'エストマスタ(参考)', '原価根拠(内部)')
 
 src, out_dir = sys.argv[1], sys.argv[2]
 tmpd = tempfile.mkdtemp()
