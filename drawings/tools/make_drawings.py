@@ -370,12 +370,34 @@ def make_m2(src, out, calc):
             else:
                 sh.text(mx, my + 0.8, label, 2.4, L_DUCT, color, align='c')
 
-    # ---- 24時間換気扇 EF-1 ---------------------------------------------------
+    # ---- 24時間換気 EF-1 パイプ用ファン（外壁貫通・壁付）-----------------------
+    def pipefan(x, y, wall, color, layer):
+        axis, v = wall
+        sgn = 1 if v > (x if axis == 'x' else y) else -1
+        if axis == 'x':
+            bx = v - sgn * 1.0                      # 本体は外壁内面に取付
+            sh.rect(min(bx, bx - sgn * 5.0), y - 3.2, max(bx, bx - sgn * 5.0), y + 3.2, layer, color)
+            sh.circle(bx - sgn * 2.5, y, 2.0, layer, color)
+            for a in (0, 120, 240):
+                r = math.radians(a)
+                sh.line(bx - sgn * 2.5, y, bx - sgn * 2.5 + 2.0 * math.cos(r), y + 2.0 * math.sin(r), layer, color)
+            for k in (-1.6, 1.6):                   # 壁貫通パイプ φ100
+                sh.line(bx, y + k, v, y + k, L_DUCT, color)
+        else:
+            by = v - sgn * 1.0
+            sh.rect(x - 3.2, min(by, by - sgn * 5.0), x + 3.2, max(by, by - sgn * 5.0), layer, color)
+            sh.circle(x, by - sgn * 2.5, 2.0, layer, color)
+            for k in (-1.6, 1.6):
+                sh.line(x + k, by, x + k, v, L_DUCT, color)
+        wall_hood(sh, x, y, wall, L_DUCT, color)
+
     for u in P.FAN24_UNITS:
-        fan(u['x'], u['y'], C_RED, L_F24)
-        duct(u['x'], u['y'], u['wall'], C_RED, label=P.FAN24['duct'])
-        sh.text(u['x'] - 3.6, u['y'] + 3.6, 'EF-1', 3.0, L_TX, C_RED, align='r')
-    sh.leader(176.0, -3.0, 200.0, -18.0, ['EF-1 FY-17C8 ×3台', '24時間常時運転', '有効換気量 80.5m³/h/台'], 3.4, L_TX, C_RED)
+        pipefan(u['x'], u['y'], u['wall'], C_RED, L_F24)
+        sh.text(u['x'] - 5.5, u['y'] + 3.6, 'EF-1', 3.0, L_TX, C_RED, align='r')
+    f = P.FAN24
+    sh.leader(186.0, -37.0, 200.0, -18.0, ['EF-1 %s ×%d台' % (f['model'], len(P.FAN24_UNITS)),
+                                          'パイプファン 24時間常時運転',
+                                          '有効換気量 %.0fm³/h/台(%dHz)' % (calc['q_eff'], P.HZ)], 3.4, L_TX, C_RED)
 
     # ---- 給気口 SA -------------------------------------------------------------
     for s in P.SUPPLY:
@@ -422,22 +444,22 @@ def make_m2(src, out, calc):
     cols = [(12, 'c'), (64, 'l'), (9, 'c'), (21, 'l')]
     f = P.FAN24
     rows = [['記号', '名称・型式・仕様', '台数', '設置場所'],
-            ['EF-1', '%s（24時間換気用）' % f['name'][:7], '3', '便所(女)'],
-            ['', '%s %s 低騒音形' % (f['maker'], f['model']), '', '小便所'],
-            ['', 'ダクト%s 有効換気量%sm³/h' % (f['duct'], f['q_eff']), '', '便所(男)'],
-            ['', '%s %sW 常時運転' % (f['power'], f['watt']), '', '']]
-    place = {'SA-1': ['外陣×3', '内陣×1'], 'SA-2': ['護摩堂'], 'SA-3': ['和室(1)', '和室(2)'], 'SA-4': ['談話室'],
+            ['EF-1', '%s（24時間換気用）' % f['name'][:7], '%d' % len(P.FAN24_UNITS), '便所(女)'],
+            ['', '%s %s %s' % (f['maker'], f['model'], f['spec'][:5]), '', '小便所'],
+            ['', 'φ100 壁付 有効換気量%.0fm³/h' % calc['q_eff'], '', '便所(男)'],
+            ['', '%s %.1fW(%dHz) 常時運転' % (f['power'], f['watt'][P.HZ], P.HZ), '', '']]
+    place = {'SA-1': ['外陣×3', '内陣×1'], 'SA-2': ['護摩堂'], 'SA-3': ['和室(1)', '和室(2)', '談話室'],
              'EF-2': ['外陣×3', '内陣×1', '護摩堂×1'], 'EF-3': ['談話室'], 'EF-4': ['パントリー']}
     for s in P.SUPPLY + P.LOCAL:
         pl = place[s['sym']] + ['', '']
         kind = '外気給気' if s['sym'].startswith('SA') else '局所換気'
         rows += [[s['sym'], '%s（%s）' % (s['name'], kind), '%d' % len(s['units']), pl[0]],
-                 ['', 'パナソニック %s%s' % (s['model'], '（%s）' % s['color'] if s['color'] else ''), '', pl[1]],
+                 ['', '%s %s%s' % (P.MAKER_VENT, s['model'], '（%s）' % s['color'] if s['color'] else ''), '', pl[1]],
                  ['', '%s ダクト%s' % (s['spec'], s['duct']), '', pl[2]]]
     yb = sh.table(x0, y0 - 9, cols, rows, 3.0, L_TBL, row_h=5.3)
     for i, s in enumerate(['※外壁フード：ステンレス製深型（防虫網付）', '※EF-2〜4（局所換気）は必要有効換気量に',
-                           '　算入しない。', '※型式・性能はパナソニック 換気システム',
-                           '　ご提案書による（配置は現行平面図に修正）。']):
+                           '　算入しない。', '※型式・性能は三菱電機 納入仕様書・',
+                           '　P-Q線図による（電源周波数60Hz）。']):
         sh.text(x0, yb - 5.5 - i * 4.6, s, 2.9, L_TBL)
 
     # ---- 凡例 --------------------------------------------------------------------
@@ -445,7 +467,8 @@ def make_m2(src, out, calc):
     y = y0
     sh.text(x0, y, '凡  例', 5.0, L_NOTE)
     y -= 10
-    fan(x0 + 4, y + 1, C_RED, L_NOTE); sh.text(x0 + 11, y, '換気扇（24時間換気用）', 3.3, L_NOTE)
+    sh.rect(x0 + 1.5, y - 2.2, x0 + 6.5, y + 4.2, L_NOTE, C_RED); sh.circle(x0 + 4, y + 1, 2.0, L_NOTE, C_RED)
+    sh.text(x0 + 11, y, 'パイプファン（24時間換気用）', 3.3, L_NOTE)
     y -= 9
     fan(x0 + 4, y + 1, C_BLUE, L_NOTE); sh.text(x0 + 11, y, '換気扇（局所換気用）', 3.3, L_NOTE)
     y -= 9
@@ -470,9 +493,9 @@ def make_m2(src, out, calc):
     y = yb - 6.5
     lines = [
         ('必要有効換気量 Vr＝Σ n·A·h', C_BLACK), ('　　　　　　　＝%.1f m³/h' % calc['sumVr'], C_BLACK),
-        ('有効換気量 Ve＝%.1f×%d台' % (P.FAN24['q_eff'], len(P.FAN24_UNITS)), C_BLACK),
+        ('有効換気量 Ve＝%.0f×%d台' % (calc['q_eff'], len(P.FAN24_UNITS)), C_BLACK),
         ('　　　　　　　＝%.1f m³/h' % calc['Ve'], C_BLACK),
-        ('（EF-1 直管相当長 %.1fm ≦20m）' % calc['eq_len'], C_BLACK),
+        ('（EF-1 P-Q線図 %dHz 相当長%.1fm）' % (P.HZ, calc['eq_len']), C_BLACK),
         ('判定 Ve≧Vr …… OK（%.2f倍）' % (calc['Ve'] / calc['sumVr']), C_RED),
         ('n：本堂部0.3、庫裏側0.5（安全側）', C_BLACK),
         ('h：天井高は仮定値（要確認）', C_BLACK),
@@ -482,8 +505,8 @@ def make_m2(src, out, calc):
     y -= 5
     sh.text(x0, y, '特記事項（シックハウス対策）', 4.2, L_NOTE)
     notes = [
-        '1.EF-1は24時間常時運転とし、',
-        '  スイッチに常時運転の表示を行う。',
+        '1.EF-1(パイプファン)は24時間常時',
+        '  運転とし、スイッチに表示を行う。',
         '2.建具アンダーカット：居室・廊下',
         '  10mm以上（有効開口100cm²以上）、',
         '  便所20mm以上又はガラリとする。',

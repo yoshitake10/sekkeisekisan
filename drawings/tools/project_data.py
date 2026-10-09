@@ -60,46 +60,58 @@ def area(room):
 
 
 # ---------------------------------------------------------------------------
-# 24時間換気（第3種機械換気）排気ファン
-#   有効換気量はメーカー公表値（直管相当長20m時）を採用 ※ダクト直管相当長が20m以下であることを確認
+# 24時間換気（第3種機械換気）排気ファン：パイプ用ファン（外壁貫通・壁付）
+#   有効換気量は三菱電機 P-Q線図（V-08PP8-BL）の送風機特性と、パイプ抵抗曲線（VU管φ100・10m）を
+#   直管相当長で比例換算した抵抗曲線との交点から求める。
+#   建設地（広島県三原市）は中国電力管内のため 60Hz。
 # ---------------------------------------------------------------------------
-FAN24 = dict(sym='EF-1', model='FY-17C8', maker='パナソニック', name='天井埋込形換気扇（低騒音形・ルーバーセット）',
-             duct='φ100', q0=95.0, q_eff=80.5, eq_len_ref=20.0, watt=7.6, power='単相100V')
+HZ = 60
+FAN24 = dict(sym='EF-1', model='V-08PP8-BL', maker='三菱電機', name='パイプ用ファン（大風量タイプ）',
+             spec='BL認定品（便所用Ⅱ型）', duct='φ100', mount='壁付（外壁貫通）',
+             q0={50: 75.0, 60: 90.0}, watt={50: 4.3, 60: 5.0}, noise={50: 30.0, 60: 35.5}, power='単相100V')
+# P-Q線図（三菱電機 V-08PP8-BL_pq.pdf）読取り値 [風量 m³/h, 静圧 Pa]
+PQ_FAN = {
+    50: [(0.0, 59.9), (19.8, 44.3), (39.6, 23.6), (44.5, 20.4), (49.5, 18.0), (54.5, 15.9), (59.4, 13.6),
+         (64.4, 10.6), (69.3, 6.7), (74.3, 0.0)],
+    60: [(0.0, 81.7), (19.8, 64.9), (39.6, 38.9), (49.5, 29.7), (59.4, 23.4), (69.3, 18.3), (74.3, 15.3),
+         (79.3, 11.4), (84.2, 6.2), (89.2, 0.0)],
+}
+PQ_PIPE10 = [(0.0, 0.0), (19.8, 0.9), (29.7, 1.7), (39.6, 2.8), (59.4, 5.6), (69.3, 7.3), (79.3, 9.2), (89.2, 11.3),
+             (99.1, 13.6), (109.0, 16.0), (118.9, 18.6)]
 FAN24_UNITS = [
-    # (設置室, x, y, 吐出し方向の外壁x/y, ダクト実長m, 曲り数)
-    dict(room='便所(女)', x=172.0, y=0.6, wall=('x', 184.04), duct_len=0.8, bends=1),
-    dict(room='小便所', x=172.0, y=-37.0, wall=('x', 184.04), duct_len=0.8, bends=1),
-    dict(room='便所(男)', x=172.0, y=-56.0, wall=('x', 184.04), duct_len=0.8, bends=1),
+    # 設置室, 記号位置(x,y)=外壁内面, 貫通する外壁, パイプ実長m(壁厚), 曲り数
+    dict(room='便所(女)', x=181.0, y=6.0, wall=('x', 184.04), duct_len=0.5, bends=0),
+    dict(room='小便所', x=181.0, y=-31.5, wall=('x', 184.04), duct_len=0.5, bends=0),
+    dict(room='便所(男)', x=181.0, y=-50.5, wall=('x', 184.04), duct_len=0.5, bends=0),
 ]
-# 直管相当長の算定用（パナソニック技術資料の一般値: 90°エルボ1個=直管1.5m相当、
-#   外壁パイプフード（深型・防虫網付）=直管10m相当 として安全側に設定）
+# 直管相当長の算定（一般値）: 90°エルボ1個=直管1.5m、屋外深形フード（防虫網付）=直管10m 相当（安全側）
 EQ_ELBOW = 1.5
 EQ_HOOD = 10.0
 
 # 給気口（外気導入ダクト付 給排気グリル）  units: (室名, x, y, ダクト接続外壁)
 SUPPLY = [
-    dict(sym='SA-1', model='VB-GE200P-T', name='給排気グリル', spec='シャッター・フィルター付', color='ライトブラウン', duct='φ200',
+    dict(sym='SA-1', model='P-23GHF5', name='給排気グリル', spec='ネットフィルター付', color='', duct='φ200',
          units=[('外陣（大間）', -120.0, -40.0, ('y', -67.42)), ('外陣（大間）', -40.0, -40.0, ('y', -67.42)),
                 ('外陣（大間）', 45.0, -40.0, ('y', -67.42)), ('内陣（本陣・御本尊）', -55.0, 40.0, ('x', -157.16))]),
-    dict(sym='SA-2', model='VB-GE150P-T', name='給排気グリル', spec='シャッター・フィルター付', color='ライトブラウン', duct='φ150',
+    dict(sym='SA-2', model='P-18GHF5', name='給排気グリル', spec='ネットフィルター付', color='', duct='φ150',
          units=[('護摩堂', -140.0, 45.0, ('x', -157.16))]),
-    dict(sym='SA-3', model='VB-GE100P3-T', name='給排気グリル', spec='シャッター・フィルター付', color='ライトブラウン', duct='φ100',
-         units=[('和室(1)', 70.0, 140.0, ('y', 148.2)), ('和室(2)', 150.0, 22.0, ('x', 184.04))]),
-    dict(sym='SA-4', model='VB-GE100P3-W', name='給排気グリル', spec='シャッター・フィルター付', color='ホワイト', duct='φ100',
-         units=[('談話室', 165.0, 80.0, ('x', 184.04))]),
+    dict(sym='SA-3', model='P-13GHF5', name='給排気グリル', spec='ネットフィルター付', color='', duct='φ100',
+         units=[('和室(1)', 70.0, 140.0, ('y', 148.2)), ('和室(2)', 150.0, 22.0, ('x', 184.04)),
+                ('談話室', 165.0, 80.0, ('x', 184.04))]),
 ]
 
 # 局所換気（24時間換気の有効換気量には算入しない）
 LOCAL = [
-    dict(sym='EF-2', model='FY-32JG8/84', name='天井埋込形換気扇', spec='焼香・護摩の排煙用', color='', duct='φ150',
+    dict(sym='EF-2', model='VD-18ZC14', name='天井埋込形換気扇', spec='焼香・護摩の排煙用', color='', duct='φ150',
          units=[('外陣（大間）', -105.0, 0.0, ('y', -67.42)), ('外陣（大間）', -25.0, 0.0, ('y', -67.42)),
                 ('外陣（大間）', 60.0, 0.0, ('y', -67.42)), ('内陣（本陣・御本尊）', -10.0, 40.0, ('y', -67.42)),
                 ('護摩堂', -118.0, 75.0, ('x', -157.16))]),
-    dict(sym='EF-3', model='FY-27JK8/84', name='天井埋込形換気扇', spec='台所・湯沸し用', color='', duct='φ100',
+    dict(sym='EF-3', model='VD-15ZC14', name='天井埋込形換気扇', spec='台所・湯沸し用', color='', duct='φ100',
          units=[('談話室', 170.0, 125.0, ('x', 184.04))]),
-    dict(sym='EF-4', model='FY-24CG8', name='天井埋込形換気扇', spec='パントリー用', color='', duct='φ100',
+    dict(sym='EF-4', model='VD-10ZC14', name='天井埋込形換気扇', spec='パントリー用', color='', duct='φ100',
          units=[('パントリー', 97.0, 138.0, ('y', 148.2))]),
 ]
+MAKER_VENT = '三菱電機'
 
 # ---------------------------------------------------------------------------
 # 空調（8月10日付 検討最終VE案 提案①ダイキン）
@@ -130,6 +142,25 @@ def fan_eq_len(u):
     return round(u['duct_len'] + u['bends'] * EQ_ELBOW + EQ_HOOD, 1)
 
 
+def _interp(pts, q):
+    for (q1, p1), (q2, p2) in zip(pts, pts[1:]):
+        if q1 <= q <= q2:
+            return p1 + (p2 - p1) * (q - q1) / (q2 - q1)
+    return pts[-1][1] if q > pts[-1][0] else pts[0][1]
+
+
+def fan_q_eff(eq_len, hz=HZ):
+    """P-Q線図の送風機特性とシステム抵抗（10m抵抗曲線×L/10）の交点風量[m³/h]（読取り誤差を見込み整数に切捨て）"""
+    lo, hi = 0.0, PQ_FAN[hz][-1][0]
+    for _ in range(60):
+        q = (lo + hi) / 2
+        if _interp(PQ_FAN[hz], q) - _interp(PQ_PIPE10, q) * eq_len / 10.0 > 0:
+            lo = q
+        else:
+            hi = q
+    return float(int(lo))
+
+
 def calc_summary():
     rooms = []
     for r in ROOMS:
@@ -147,7 +178,8 @@ def calc_summary():
                            V=round(sum(r['V'] for r in rs), 2), n=ns[0], Vr=round(sum(r['Vr'] for r in rs), 2)))
     assert sorted(n for _, nos in GROUPS for n in nos) == sorted(byno)
     eq_len = max(fan_eq_len(u) for u in FAN24_UNITS)
-    Ve = round(FAN24['q_eff'] * len(FAN24_UNITS), 1)
+    q_eff = fan_q_eff(eq_len)
+    Ve = rnd(q_eff * len(FAN24_UNITS), 1)
     return dict(rooms=rooms, groups=groups, sumA=round(sum(r['A'] for r in rooms), 2),
                 sumV=round(sum(r['V'] for r in rooms), 2), sumVr=rnd(sum(r['Vr'] for r in rooms), 1),
-                Ve=Ve, eq_len=eq_len)
+                Ve=Ve, eq_len=eq_len, q_eff=q_eff, q_eff50=fan_q_eff(eq_len, 50))

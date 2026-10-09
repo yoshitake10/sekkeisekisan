@@ -74,7 +74,7 @@ def build(out):
         r[0] += 1
 
     head('2. 換気方式')
-    for s in ['第3種機械換気設備（排気機：天井埋込形換気扇 常時運転／給気：外気導入グリル）。',
+    for s in ['第3種機械換気設備（排気機：パイプ用ファン 外壁貫通・常時運転／給気：外気導入グリル）。',
               '全館の居室及び廊下・ホール・便所等を、建具アンダーカット等の通気経路により一体的に換気する一の換気経路とする。',
               '換気回数 n：本堂部（外陣・内陣・護摩堂・広縁）＝住宅等の居室以外の居室 0.3回/h、',
               '　　　　　　庫裏側（和室・談話室及び廊下等）＝安全側に住宅等の居室の値 0.5回/h を採用。',
@@ -112,20 +112,22 @@ def build(out):
                size=8.5, height=24)
 
     # ---- 4. 有効換気量 --------------------------------------------------------------
-    head('4. 有効換気量 Ve（機械換気設備：排気機）')
-    row(['記号', '設置室', '台数', 'ダクト径', 'ダクト実長\nL (m)', '曲り数\n(個)', '直管相当長\n(m)',
+    head('4. 有効換気量 Ve（機械換気設備：排気機 パイプ用ファン）')
+    row(['記号', '設置室', '台数', 'パイプ径', 'パイプ実長\nL (m)', '曲り数\n(個)', '直管相当長\n(m)',
          '有効換気量\n(m³/h･台)', '機種・備考'], bold=True, fill=FILL_H, al='center', wrap=True, size=9)
     ws.row_dimensions[r[0] - 1].height = 30
     f = P.FAN24
+    calc = P.calc_summary()
     r0 = r[0]
     for u in P.FAN24_UNITS:
         i = r[0]
         row([f['sym'], u['room'], 1, f['duct'], u['duct_len'], u['bends'],
              '=ROUND(E%d+F%d*$C$%d+$C$%d,1)' % (i, i, 0, 0),  # 後で置換
-             '=IF(G%d<=%s,%s,"要P-Q確認")' % (i, f['eq_len_ref'], f['q_eff']),
-             '%s %s（%s）' % (f['maker'], f['model'], f['power'])], size=9)
+             P.fan_q_eff(P.fan_eq_len(u)),
+             '%s %s（%s・%s）' % (f['maker'], f['model'], f['mount'], f['power'])], size=9)
         for col in 'EF':
             ws['%s%d' % (col, i)].fill = FILL_IN
+        ws['H%d' % i].number_format = '0.0'
         for col in 'ACDEFGH':
             ws['%s%d' % (col, i)].alignment = Alignment(horizontal='center')
     r1 = r[0] - 1
@@ -139,13 +141,31 @@ def build(out):
     put('C%d' % i, P.EQ_ELBOW, size=9, fill=FILL_IN, al='center')
     put('D%d' % i, 'm／90°曲り1個', size=9, border=False); ws.merge_cells('D%d:E%d' % (i, i))
     put('F%d' % i, P.EQ_HOOD, size=9, fill=FILL_IN, al='center')
-    put('G%d' % i, 'm／外壁フード（深型・防虫網付）', size=9, border=False); ws.merge_cells('G%d:I%d' % (i, i))
+    put('G%d' % i, 'm／屋外深形フード（防虫網付）', size=9, border=False); ws.merge_cells('G%d:I%d' % (i, i))
     for k in range(r0, r1 + 1):
         ws['G%d' % k].value = '=ROUND(E%d+F%d*$C$%d+$F$%d,1)' % (k, k, i, i)
     r[0] += 1
-    merge_line('※有効換気量はメーカー公表値（%s：静圧時 直管相当長20m で %.1f m³/h、30m で 76 m³/h、開放時 %.0f m³/h、'
-               '消費電力 %.1fW）。直管相当長が20m以下であることを確認し、20m時の値を採用（安全側）。'
-               % (f['model'], f['q_eff'], f['q0'], f['watt']), size=8.5, height=36)
+    # P-Q 交点の根拠表
+    L = calc['eq_len']
+    r[0] += 1
+    merge_line('有効換気量の算定（%s P-Q線図 %dHz：送風機静圧と、パイプ抵抗曲線〔VU管φ100・10m〕を直管相当長 %.1fm に'
+               '比例換算した抵抗との交点）' % (f['model'], P.HZ, L), size=9, height=28)
+    row(['', '風量 Q', '', '送風機静圧', None, '抵抗 L=%.1fm' % L, None, '差', ''], bold=True, fill=FILL_H, al='center',
+        size=9)
+    ws.merge_cells('B%d:C%d' % (r[0] - 1, r[0] - 1)); ws.merge_cells('D%d:E%d' % (r[0] - 1, r[0] - 1))
+    ws.merge_cells('F%d:G%d' % (r[0] - 1, r[0] - 1))
+    for q in (60.0, 70.0, 75.0, calc['q_eff'], 85.0):
+        pf = P._interp(P.PQ_FAN[P.HZ], q); ps = P._interp(P.PQ_PIPE10, q) * L / 10
+        i = r[0]
+        row(['', '%.0f m³/h' % q, None, '%.1f Pa' % pf, None, '%.1f Pa' % ps, None, '%+.1f Pa' % (pf - ps),
+             '← 有効換気量（交点・切捨て）' if q == calc['q_eff'] else ''], size=9, al='center')
+        ws.merge_cells('B%d:C%d' % (i, i)); ws.merge_cells('D%d:E%d' % (i, i)); ws.merge_cells('F%d:G%d' % (i, i))
+        ws['I%d' % i].alignment = Alignment(horizontal='left')
+    merge_line('※建設地（広島県三原市）は中国電力管内のため電源周波数60Hzで算定。参考：50Hzの場合 %.0f m³/h/台×%d台＝%.0f m³/h'
+               '（この場合も必要有効換気量以上）。開放風量（機外静圧0Pa）は50Hz %.0f／60Hz %.0f m³/h、消費電力 %.1f／%.1f W。'
+               % (calc['q_eff50'], len(P.FAN24_UNITS), calc['q_eff50'] * len(P.FAN24_UNITS), f['q0'][50], f['q0'][60],
+                  f['watt'][50], f['watt'][60]), size=8.5, height=36)
+    merge_line('※直管相当長を変更した場合は、P-Q線図で有効換気量（H列）を読み直すこと。', size=8.5, height=15)
 
     # ---- 5. 判定 ------------------------------------------------------------------
     head('5. 判  定')
@@ -184,8 +204,8 @@ def build(out):
             rooms[u[0]] = rooms.get(u[0], 0) + 1
         for nm, n in rooms.items():
             i = r[0]
-            row([s['sym'], nm, n, s['duct'], 'パナソニック %s' % s['model'], None, None, None,
-                 '%s（%s）' % (s['spec'], s['color'])], size=9)
+            row([s['sym'], nm, n, s['duct'], '%s %s' % (P.MAKER_VENT, s['model']), None, None, None,
+                 '%s%s' % (s['spec'], '（%s）' % s['color'] if s['color'] else '')], size=9)
             ws.merge_cells('E%d:H%d' % (i, i))
             for col in 'ACD':
                 ws['%s%d' % (col, i)].alignment = Alignment(horizontal='center')
@@ -199,7 +219,7 @@ def build(out):
     for s in ['(1) 換気経路：給気口（各居室）→ 居室建具（アンダーカット）→ 廊下・ホール → 便所建具 → 排気機（EF-1）→ 屋外。',
               '(2) 建具：居室・廊下の建具はアンダーカット10mm以上（有効開口面積100cm²以上）、便所の建具はアンダーカット20mm以上又はガラリ。',
               '    障子・襖・格子戸等で常時通気が確保されるものはこれによる。',
-              '(3) 排気機（EF-1）は24時間常時運転とし、スイッチに「24時間換気（常時運転）」の表示を行う。',
+              '(3) 排気機（EF-1 パイプ用ファン）は24時間常時運転とし、スイッチに「24時間換気（常時運転）」の表示を行う。',
               '(4) 内装仕上げの制限（令20条の7）：居室の内装仕上げには第1種・第2種ホルムアルデヒド発散建築材料を使用しない'
               '（F☆☆☆☆ 又は規制対象外の材料とする）。',
               '(5) 天井裏等の措置（令20条の9・平15国交告第274号）：天井裏・小屋裏・床下・壁内・収納の下地材等に'
@@ -210,9 +230,9 @@ def build(out):
 
     head('8. 前提条件・要確認事項')
     for s in ['・天井高（特に外陣・内陣・護摩堂の格天井・折上天井）は仮定値。矩計図・断面図確定後に本書を更新すること。',
-              '・機器配置・ダクトルートは設計段階の計画。施工図段階でダクト直管相当長が20mを超える場合はP-Q曲線で有効換気量を確認する。',
-              '・換気機器はパナソニック「換気システムご提案書」（当初プラン）を基に、現行平面図（令和8年7月20日版）に合わせて配置を修正した。',
-              '・電源（EF-1 単相100V 常時通電回路）は電気設備工事による。']:
+              '・機器配置・ダクトルートは設計段階の計画。施工図段階で排気側の直管相当長が変わる場合はP-Q線図で有効換気量を確認する。',
+              '・換気機器は三菱電機製とする（パナソニック当初提案から変更）。性能値は三菱電機の納入仕様書・P-Q線図による。',
+              '・電源（EF-1 単相100V 常時通電回路、スイッチは常時運転表示付）は電気設備工事による。']:
         merge_line(s, size=9, height=27)
 
     # ---- 印刷設定 -------------------------------------------------------------------
