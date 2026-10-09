@@ -13,6 +13,7 @@ job モジュールに必要な属性:
   任意: BASIS_NOTE（数量拾い根拠の注記2行）, ALERT_NOTES（表紙内部欄の追加アラート）,
         WORK_TITLE（表紙20行目・内訳書4行目の工事種別。既定 '空気調和工事'）, OH_NO（工事諸経費の番号。既定 '８'）,
         WF_EQUIP_TXT（法定福利費明細の「○○は含みません」。既定 '空調機器'）,
+        COVER_INTERNAL_NOTES（表紙内部欄 M16・M17 の追加注記、最大2行）,
         EQUIP_ROW = None で表紙の静的な機器行を出さない（機器を明細の部門として計上する場合）
 部門（SECTIONS[*]）: key, no, title, lines。任意: exp_key（部門内経費の率のキー。既定 key）,
   oh（工事諸経費の対象。既定 True。機器部門は False）, break_after（この部門の後で改ページ。
@@ -576,6 +577,8 @@ def build_cover(ws, job, det, wf, cl):
     grid(ws, 'M3:N13', outer='thin', vert='thin', horiz='thin')
     put(ws, 'M14', '※ 提出額＝原価合計÷（1－目標粗利率）を丸め単位で切上げ。小計（エスト単価の定価ベース）との差を出精値引に計上', size=9, color=C_GRAYTXT)
     put(ws, 'M15', '※ 原価＝材料（エスト材料単価×材料原価率＝建設物価相当）＋人工×労務原価日額＋法定福利費（事業主負担）', size=9, color=C_GRAYTXT)
+    for i, t in enumerate(getattr(job, 'COVER_INTERNAL_NOTES', [])[:2]):
+        put(ws, f'M{16 + i}', '※ ' + t, size=9, color=C_GRAYTXT)
     for ref, txt in [('M19', '内部集計'), ('N19', '定価ベース'), ('O19', '原価'), ('P19', '粗利'), ('Q19', '粗利率')]:
         put(ws, ref, txt, size=10, h='center', color=C_GRAYTXT, fill=FILL_G, shrink=True)
     gt = det['gt']
