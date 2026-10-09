@@ -10,10 +10,17 @@ job モジュールに必要な属性:
   NOTES = dict(cover=[...], conditions=[...], checks=[...]), SECTIONS（明細）, BASIS_TABLES,
   COVER_SCOPE = dict(include='...', exclude='...')（表紙21行目の注記。要見積の計上有無で切替）,
   EQUIP_ROW = ('空調設備機器', '別途')（表紙①の名称と表示）, COST_NOTES（原価の前提）,
-  任意: BASIS_NOTE（数量拾い根拠の注記2行）, ALERT_NOTES（表紙内部欄の追加アラート）
+  任意: BASIS_NOTE（数量拾い根拠の注記2行）, ALERT_NOTES（表紙内部欄の追加アラート）,
+        WORK_TITLE（表紙20行目・内訳書4行目の工事種別。既定 '空気調和工事'）, OH_NO（工事諸経費の番号。既定 '８'）,
+        WF_EQUIP_TXT（法定福利費明細の「○○は含みません」。既定 '空調機器'）,
+        EQUIP_ROW = None で表紙の静的な機器行を出さない（機器を明細の部門として計上する場合）
+部門（SECTIONS[*]）: key, no, title, lines。任意: exp_key（部門内経費の率のキー。既定 key）,
+  oh（工事諸経費の対象。既定 True。機器部門は False）, break_after（この部門の後で改ページ。
+  どの部門にも指定がなければ先頭部門の後で改ページ）。部門内経費の行（kind='exp'）が無い部門は計＝明細の合計。
 明細（SECTIONS[*]['lines']）の kind:
   head / item（cat=単価カタログのキー、または price・src・ref を直接指定）/ tbd（要見積、prov=概算原価）
   / pct（rate・base）/ labor（base・rate='EST_LABOR_PIPE' または 'EST_LABOR_ELEC'）/ exp（idx=0,1,2）
+  item の mat: 数値（材料原価/単位）または ('EST', 割増)＝単価×材料原価率×割増、('EQ', 比)＝機器の提出単価×材料原価率×比
 """
 import math
 import os
@@ -79,6 +86,22 @@ def sections(job):
     return out
 
 
+def work_title(job):
+    return getattr(job, 'WORK_TITLE', '空気調和工事')
+
+
+def cover_rows(job, secs):
+    """表紙の金額行の並び: [('equip', None) | ('sec', sec) ..., ('oh', None)] と 小計・値引・合計の行番号"""
+    rows = []
+    if getattr(job, 'EQUIP_ROW', None):
+        rows.append(('equip', None))
+    rows += [('sec', s) for s in secs]
+    rows.append(('oh', None))
+    first = 22
+    sub = first + len(rows)
+    return dict(rows=rows, first=first, sub=sub, disc=sub + 1, total=sub + 2)
+
+
 # =====================================================================
 # 内訳書
 # =====================================================================
@@ -106,7 +129,7 @@ def build_detail(ws, job):
         put(ws, f'{col}3', txt, size=9, h='center', fill=FILL_G, color=C_GRAYTXT, shrink=True)
     ws.row_dimensions[3].height = 22
     merge(ws, 'A4:I4')
-    put(ws, 'A4', '空気調和工事', bold=True)
+    put(ws, 'A4', work_title(job), bold=True)
     r = 5
     rows, sec_info, all_lines = {}, {}, []
     for si, sec in enumerate(secs):
@@ -126,7 +149,7 @@ def build_detail(ws, job):
                 r += 1
                 continue
             if k == 'exp':
-                name, rate = R.EST_EXP[sec['key']][ln['idx']]
+                name, rate = R.EST_EXP[sec.get('exp_key', sec['key'])][ln['idx']]
                 ln = dict(ln, key=f"{sec['key']}_exp{ln['idx']}", name=name, rate=rate)
             ln['_row'], ln['_sec'] = r, sec['key']
             rows[ln['key']] = r
@@ -171,7 +194,9 @@ def build_detail(ws, job):
                 put(ws, f'W{r}', ln.get('ref') or None, size=9)
                 memo = ln.get('memo') or ''
                 if isinstance(mat, tuple):
-                    memo = f'材料原価＝単価×材料原価率×管長割増{mat[1]}（建設物価相当）' + ('｜' + memo if memo else '')
+                    pre = (f'機器原価＝提出単価×材料原価率×{mat[1]}（仕入率÷提出率）' if mat[0] == 'EQ'
+                           else f'材料原価＝単価×材料原価率×管長割増{mat[1]}（建設物価相当）')
+                    memo = pre + ('｜' + memo if memo else '')
                 put(ws, f'Z{r}', memo or None, size=9)
             elif k == 'tbd':
                 put(ws, f'A{r}', '　　' + ln['name'], size=10, shrink=True, color=C_RED)
@@ -227,15 +252,18 @@ def build_detail(ws, job):
                 put(ws, f'S{r}', f'=IF(H{r}="","",H{r}-P{r})', size=10, h='right', fmt=FMT_SIGNED)
                 put(ws, f'T{r}', f'=IF(OR(H{r}="",H{r}=0),"",S{r}/H{r})', size=10, h='right', fmt='0.0%')
             r += 1
-        e1, e2, e3 = exp_rows
-        base = f'SUM(H{first}:H{e1 - 1})'
-        put(ws, f'H{e1}', f'=ROUNDUP({base}*U{e1},-2)', size=10, h='right', fmt=FMT_SIGNED)
-        put(ws, f'H{e2}', f'=ROUNDUP(({base}+H{e1})*U{e2},-2)', size=10, h='right', fmt=FMT_SIGNED)
-        s3 = f'({base}+H{e1}+H{e2})'
-        put(ws, f'H{e3}', f'=ROUNDUP({s3}+ROUNDUP({s3}*U{e3},-2),-3)-{s3}', size=10, h='right', fmt=FMT_SIGNED)
-        put(ws, f'W{e1}', '基礎額×率（100円未満切上げ）', size=9)
-        put(ws, f'W{e2}', '（基礎額＋消耗品）×率（100円未満切上げ）', size=9)
-        put(ws, f'W{e3}', '（基礎額＋消耗品＋運搬費）×率を加え、計を1,000円未満切上げ', size=9)
+        if exp_rows:
+            e1, e2, e3 = exp_rows
+            base = f'SUM(H{first}:H{e1 - 1})'
+            put(ws, f'H{e1}', f'=ROUNDUP({base}*U{e1},-2)', size=10, h='right', fmt=FMT_SIGNED)
+            put(ws, f'H{e2}', f'=ROUNDUP(({base}+H{e1})*U{e2},-2)', size=10, h='right', fmt=FMT_SIGNED)
+            s3 = f'({base}+H{e1}+H{e2})'
+            put(ws, f'H{e3}', f'=ROUNDUP({s3}+ROUNDUP({s3}*U{e3},-2),-3)-{s3}', size=10, h='right', fmt=FMT_SIGNED)
+            put(ws, f'W{e1}', '基礎額×率（100円未満切上げ）', size=9)
+            put(ws, f'W{e2}', '（基礎額＋消耗品）×率（100円未満切上げ）', size=9)
+            put(ws, f'W{e3}', '（基礎額＋消耗品＋運搬費）×率を加え、計を1,000円未満切上げ', size=9)
+        else:
+            e3 = r - 1
         tot = r
         merge(ws, f'A{tot}:D{tot}')
         put(ws, f'A{tot}', '－　計　－', bold=True, h='center')
@@ -251,21 +279,22 @@ def build_detail(ws, job):
         merge(ws, f'A{r}:B{r}')
         merge(ws, f'C{r}:D{r}')
         ws.row_dimensions[r].height = 10
-        if si == 0:
+        if (sec.get('break_after', False) if any('break_after' in x for x in secs) else si == 0):
             ws.row_breaks.append(Break(id=r))
         r += 1
     oh = r
     merge(ws, f'A{oh}:B{oh}')
     merge(ws, f'C{oh}:D{oh}')
-    put(ws, f'A{oh}', '８　工事諸経費', bold=True)
+    put(ws, f'A{oh}', getattr(job, 'OH_NO', '８') + '　工事諸経費', bold=True)
     put(ws, f'E{oh}', 1, size=10, h='right', fmt='#,##0_ ')
     put(ws, f'F{oh}', '式', size=10, h='center')
-    ac_t, pp_t = sec_info['AC']['total'], sec_info['PIPE']['total']
-    put(ws, f'H{oh}', f'=ROUNDUP((H{ac_t}+H{pp_t})*U{oh},-2)', bold=True, h='right', fmt=FMT_SIGNED)
+    oh_secs = [s for s in secs if s.get('oh', True)]
+    oh_sum = '+'.join(f"H{sec_info[s['key']]['total']}" for s in oh_secs)
+    put(ws, f'H{oh}', f'=ROUNDUP(({oh_sum})*U{oh},-2)', bold=True, h='right', fmt=FMT_SIGNED)
     put(ws, f'J{oh}', '経費', size=9, h='center')
     put(ws, f'U{oh}', R.EST_OVERHEAD, size=10, h='right', fmt='0%', fill=FILL_Y)
     put(ws, f'P{oh}', 0, size=10, h='right', fmt=FMT_SIGNED)
-    put(ws, f'W{oh}', '（空調設備工事＋配管設備工事）×5%（100円未満切上げ）', size=9)
+    put(ws, f'W{oh}', '（' + '＋'.join(s['title'] for s in oh_secs) + '）×5%（100円未満切上げ）', size=9)
     ws.row_dimensions[oh].height = 20
     r = oh + 1
     merge(ws, f'A{r}:B{r}')
@@ -274,11 +303,12 @@ def build_detail(ws, job):
     gt = r + 1
     merge(ws, f'A{gt}:D{gt}')
     put(ws, f'A{gt}', '【小　　計】', bold=True, h='center')
-    put(ws, f'H{gt}', f'=H{ac_t}+H{pp_t}+H{oh}', bold=True, h='right', fmt=FMT_SIGNED)
+    tots = [sec_info[s['key']]['total'] for s in secs]
+    put(ws, f'H{gt}', '=' + '+'.join(f'H{t}' for t in tots) + f'+H{oh}', bold=True, h='right', fmt=FMT_SIGNED)
     put(ws, f'I{gt}', '出精値引は表紙', size=9, h='center', shrink=True)
-    put(ws, f'M{gt}', f'=M{ac_t}+M{pp_t}', bold=True, h='right', fmt='0.00')
+    put(ws, f'M{gt}', '=' + '+'.join(f'M{t}' for t in tots), bold=True, h='right', fmt='0.00')
     for col in 'PQR':
-        put(ws, f'{col}{gt}', f'={col}{ac_t}+{col}{pp_t}', bold=True, h='right', fmt=FMT_SIGNED)
+        put(ws, f'{col}{gt}', '=' + '+'.join(f'{col}{t}' for t in tots), bold=True, h='right', fmt=FMT_SIGNED)
     put(ws, f'S{gt}', f'=H{gt}-P{gt}', bold=True, h='right', fmt=FMT_SIGNED)
     put(ws, f'T{gt}', f'=IF(H{gt}=0,"",S{gt}/H{gt})', bold=True, h='right', fmt='0.0%')
     ws.row_dimensions[gt].height = 22
@@ -286,8 +316,7 @@ def build_detail(ws, job):
     grid(ws, f'J3:Z{gt}', outer='thin', vert='thin', horiz='hair')
     hline(ws, 'A3:I3', 'bottom', 'thin')
     hline(ws, 'J3:Z3', 'bottom', 'thin')
-    for key in ('AC', 'PIPE'):
-        t = sec_info[key]['total']
+    for t in tots:
         hline(ws, f'A{t}:I{t}', 'top', 'thin')
         hline(ws, f'J{t}:Z{t}', 'top', 'thin')
     hline(ws, f'A{gt}:I{gt}', 'top', 'medium')
@@ -304,7 +333,7 @@ def build_detail(ws, job):
 # =====================================================================
 # 法定福利費内訳明細書（工事費に内含）
 # =====================================================================
-def build_welfare(ws, job, det):
+def build_welfare(ws, job, det, cl):
     set_widths(ws, dict(A=2, B=25, C=9, D=9, E=14, F=16, G=31))
     merge(ws, 'B1:G1')
     put(ws, 'B1', '法 定 福 利 費 内 訳 明 細 書', size=14, bold=True, h='center')
@@ -330,7 +359,7 @@ def build_welfare(ws, job, det):
         ws.row_dimensions[r].height = 20
     put(ws, 'B10', '【1】　労務費相当額（Ｙ）の内訳', bold=True)
     note1 = ('※ 労務費相当額は、内訳書各項目の金額のうち労務費に相当する額（配管工費・電線材料施工費、および据付・保温・試験等の人工相当額）'
-             'に、出精値引き後の比率を乗じたものです。空調機器は含みません。')
+             f"に、出精値引き後の比率を乗じたものです。{getattr(job, 'WF_EQUIP_TXT', '空調機器')}は含みません。")
     merge(ws, 'B11:G11')
     put(ws, 'B11', note1, size=10, wrap=True)
     ws.row_dimensions[11].height = row_h(est_lines(note1, 104, 10), 10)
@@ -340,22 +369,24 @@ def build_welfare(ws, job, det):
     merge(ws, 'E12:G12')
     put(ws, 'E12', '摘　　要', h='center', fill=FILL_G)
     fill_range(ws, 'B12:G12', FILL_G)
-    ac_t, pp_t = det['sec']['AC']['total'], det['sec']['PIPE']['total']
-    for r, lab, f, memo in [
-            (13, '空調設備工事', f"={q(SH_DETAIL)}!R{ac_t}", '内訳書 ２ 空調設備工事（定価ベース）'),
-            (14, '配管設備工事', f"={q(SH_DETAIL)}!R{pp_t}", '内訳書 ３ 配管設備工事（定価ベース）'),
-            (15, '小　　計', '=C13+C14', '定価ベース'),
-            (16, '労務費相当額（Ｙ）', f"=ROUNDDOWN(C15*{q(SH_COVER)}!K28/{q(SH_COVER)}!K26,0)", '小計 × 出精値引き後比率（合計÷小計）')]:
-        bold = r == 16
+    wsecs = [s for s in det['secs'] if s.get('oh', True)]
+    items = [(13 + i, s['title'], f"={q(SH_DETAIL)}!R{det['sec'][s['key']]['total']}",
+              f"内訳書 {s['no']} {s['title']}（定価ベース）") for i, s in enumerate(wsecs)]
+    rs, ry = 13 + len(wsecs), 14 + len(wsecs)
+    items += [(rs, '小　　計', '=' + '+'.join(f'C{x[0]}' for x in items), '定価ベース'),
+              (ry, '労務費相当額（Ｙ）', f"=ROUNDDOWN(C{rs}*{q(SH_COVER)}!K{cl['total']}/{q(SH_COVER)}!K{cl['sub']},0)",
+               '小計 × 出精値引き後比率（合計÷小計）')]
+    for r, lab, f, memo in items:
+        bold = r == ry
         put(ws, f'B{r}', lab, bold=bold, indent=1)
         merge(ws, f'C{r}:D{r}')
         put(ws, f'C{r}', f, bold=bold, h='right', fmt=FMT_AMT)
         merge(ws, f'E{r}:G{r}')
         put(ws, f'E{r}', memo, size=10, indent=1)
         ws.row_dimensions[r].height = 20
-    grid(ws, 'B12:G16', outer='medium', vert='thin', horiz='thin')
-    hline(ws, 'B16:G16', 'top', 'double')
-    r = 18
+    grid(ws, f'B12:G{ry}', outer='medium', vert='thin', horiz='thin')
+    hline(ws, f'B{ry}:G{ry}', 'top', 'double')
+    r = ry + 2
     put(ws, f'B{r}', '【2】　法定福利費相当額（Ａ）の算定', bold=True)
     r += 1
     merge(ws, f'B{r}:G{r}')
@@ -372,7 +403,7 @@ def build_welfare(ws, job, det):
     for name, rate, basis in R.WELFARE_RATES:
         put(ws, f'B{r}', name, indent=1)
         merge(ws, f'C{r}:D{r}')
-        put(ws, f'C{r}', '=$C$16', h='right', fmt=FMT_AMT)
+        put(ws, f'C{r}', f'=$C${ry}', h='right', fmt=FMT_AMT)
         put(ws, f'E{r}', rate, h='right', fmt='0.000%_ ')
         put(ws, f'F{r}', f'=ROUNDDOWN(C{r}*E{r},0)', h='right', fmt=FMT_AMT)
         put(ws, f'G{r}', basis, size=9, wrap=True)
@@ -394,14 +425,14 @@ def build_welfare(ws, job, det):
         ws.row_dimensions[r].height = row_h(est_lines(t, 104, 10), 10)
         r += 1
     page_setup(ws, f'B1:G{r - 1}', fit_h=1)
-    return dict(rate_cell=f'$E${tot}', amount_cell=f'$F${tot}', y_cell='$C$16')
+    return dict(rate_cell=f'$E${tot}', amount_cell=f'$F${tot}', y_cell=f'$C${ry}')
 
 
 # =====================================================================
 # 表紙(工事)
 # =====================================================================
-def build_cover(ws, job, det, wf):
-    FIRST, SUB, DISC, TOTAL = 22, 26, 27, 28
+def build_cover(ws, job, det, wf, cl):
+    FIRST, SUB, DISC, TOTAL = cl['first'], cl['sub'], cl['disc'], cl['total']
     set_widths(ws, dict(A=6, B=8, C=3, D=15, E=9, F=9, G=7, H=5, I=7, J=7, K=14, L=12,
                         M=46, N=13, O=13, P=13, Q=10))
     merge(ws, 'A1:L2')
@@ -463,21 +494,26 @@ def build_cover(ws, job, det, wf):
         put(ws, ref, txt, size=sz, h='center', fill=FILL_G, shrink=True)
     fill_range(ws, 'A19:L19', FILL_G)
     merge(ws, 'B20:L20')
-    put(ws, 'B20', '【' + job.PROJECT_FULL + '】　空気調和工事', indent=1, shrink=True)
+    put(ws, 'B20', '【' + job.PROJECT_FULL + '】　' + work_title(job), indent=1, shrink=True)
     merge(ws, 'B21:L21')
     put(ws, 'B21', f'=IF(INCLUDE_TBD=1,"{job.COVER_SCOPE["include"]}","{job.COVER_SCOPE["exclude"]}")', size=10, indent=1, shrink=True)
     for r in range(22, TOTAL + 1):
         merge(ws, f'B{r}:F{r}')
         merge(ws, f'I{r}:J{r}')
-    ac_t, pp_t, oh = det['sec']['AC']['total'], det['sec']['PIPE']['total'], det['oh']
-    eq_name, eq_show = job.EQUIP_ROW
-    fmt_eq = f'#,##0_ ;[Red]-#,##0_ ;"{eq_show}"_ '
-    secs = det['secs']
-    for r, no, name, fk, remark, fmt in [
-            (22, CIRC[0], eq_name, 0, eq_show, fmt_eq),
-            (23, CIRC[1], secs[0]['title'], f"={q(SH_DETAIL)}!H{ac_t}", '内訳書 ２', FMT_SIGNED),
-            (24, CIRC[2], secs[1]['title'], f"={q(SH_DETAIL)}!H{pp_t}", '内訳書 ３', FMT_SIGNED),
-            (25, CIRC[3], '工事諸経費', f"={q(SH_DETAIL)}!H{oh}", '内訳書 ８', FMT_SIGNED)]:
+    oh = det['oh']
+    spec = []
+    for i, (kind, sec) in enumerate(cl['rows']):
+        r = FIRST + i
+        if kind == 'equip':
+            eq_name, eq_show = job.EQUIP_ROW
+            spec.append((r, CIRC[i], eq_name, 0, eq_show, f'#,##0_ ;[Red]-#,##0_ ;"{eq_show}"_ '))
+        elif kind == 'sec':
+            spec.append((r, CIRC[i], sec['title'], f"={q(SH_DETAIL)}!H{det['sec'][sec['key']]['total']}",
+                         '内訳書 ' + sec['no'], FMT_SIGNED))
+        else:
+            spec.append((r, CIRC[i], '工事諸経費', f"={q(SH_DETAIL)}!H{oh}", '内訳書 ' + getattr(job, 'OH_NO', '８'),
+                         FMT_SIGNED))
+    for r, no, name, fk, remark, fmt in spec:
         put(ws, f'A{r}', no, h='center')
         put(ws, f'B{r}', name, indent=1, shrink=True)
         put(ws, f'G{r}', 1, h='right', fmt=FMT_QTY)
@@ -487,7 +523,7 @@ def build_cover(ws, job, det, wf):
         put(ws, f'L{r}', remark, size=10, h='center', shrink=True)
     put(ws, f'B{SUB}', '　小　　計', indent=1)
     put(ws, f'K{SUB}', f'=SUM(K{FIRST}:K{SUB - 1})', h='right', fmt=FMT_SIGNED)
-    put(ws, f'A{DISC}', CIRC[4], h='center')
+    put(ws, f'A{DISC}', CIRC[len(cl['rows'])], h='center')
     put(ws, f'B{DISC}', '出精値引', indent=1)
     put(ws, f'K{DISC}', f'=IF(SUBMIT<K{SUB},SUBMIT-K{SUB},0)', h='right', fmt=FMT_SIGNED)
     put(ws, f'B{TOTAL}', '　合　　計', bold=True, indent=1)
@@ -543,28 +579,33 @@ def build_cover(ws, job, det, wf):
     for ref, txt in [('M19', '内部集計'), ('N19', '定価ベース'), ('O19', '原価'), ('P19', '粗利'), ('Q19', '粗利率')]:
         put(ws, ref, txt, size=10, h='center', color=C_GRAYTXT, fill=FILL_G, shrink=True)
     gt = det['gt']
-    for rr, lab, nv, ov in [
-            (23, '②空調設備工事', '=K23', f"={q(SH_DETAIL)}!P{ac_t}"),
-            (24, '③配管設備工事', '=K24', f"={q(SH_DETAIL)}!P{pp_t}"),
-            (25, '④工事諸経費（原価なし）', '=K25', 0),
-            (26, '法定福利費（事業主負担・原価）', None, f"=ROUND({q(SH_DETAIL)}!Q{gt}*WELFARE_RATE,0)"),
-            (27, '原価合計', f'=K{SUB}', '=SUM(O23:O26)')]:
-        put(ws, f'M{rr}', lab, size=10, bold=(rr == 27), shrink=True)
+    internal = []
+    for i, (kind, sec) in enumerate(cl['rows']):
+        rr = FIRST + i
+        if kind == 'sec':
+            internal.append((rr, CIRC[i] + sec['title'], f'=K{rr}', f"={q(SH_DETAIL)}!P{det['sec'][sec['key']]['total']}"))
+        elif kind == 'oh':
+            internal.append((rr, CIRC[i] + '工事諸経費（原価なし）', f'=K{rr}', 0))
+    first_int = internal[0][0]
+    internal += [(SUB, '法定福利費（事業主負担・原価）', None, f"=ROUND({q(SH_DETAIL)}!Q{gt}*WELFARE_RATE,0)"),
+                 (DISC, '原価合計', f'=K{SUB}', f'=SUM(O{first_int}:O{SUB})')]
+    for rr, lab, nv, ov in internal:
+        put(ws, f'M{rr}', lab, size=10, bold=(rr == DISC), shrink=True)
         put(ws, f'N{rr}', nv, h='right', fmt=FMT_SIGNED)
-        put(ws, f'O{rr}', ov, h='right', fmt=FMT_SIGNED, bold=(rr == 27))
-        if nv is not None and rr != 27:
+        put(ws, f'O{rr}', ov, h='right', fmt=FMT_SIGNED, bold=(rr == DISC))
+        if nv is not None and rr != DISC:
             put(ws, f'P{rr}', f'=N{rr}-O{rr}', h='right', fmt=FMT_SIGNED)
             put(ws, f'Q{rr}', f'=IF(N{rr}=0,"",P{rr}/N{rr})', h='right', fmt='0.0%')
     put(ws, f'M{TOTAL}', '提出額（合計）／粗利／粗利率', size=10, bold=True, shrink=True)
     put(ws, f'N{TOTAL}', f'=K{TOTAL}', bold=True, h='right', fmt=FMT_AMT)
-    put(ws, f'O{TOTAL}', '=O27', h='right', fmt=FMT_AMT)
+    put(ws, f'O{TOTAL}', f'=O{DISC}', h='right', fmt=FMT_AMT)
     put(ws, f'P{TOTAL}', f'=N{TOTAL}-O{TOTAL}', bold=True, h='right', fmt=FMT_SIGNED)
     put(ws, f'Q{TOTAL}', f'=IF(N{TOTAL}=0,"",P{TOTAL}/N{TOTAL})', bold=True, h='right', fmt='0.0%')
     grid(ws, f'M19:Q{TOTAL}', outer='thin', vert='thin', horiz='hair')
     # アラート
     tbd = [ln for ln in det['lines'] if ln['kind'] == 'tbd']
     own = [ln for ln in det['lines'] if ln['kind'] == 'item' and ln['src'] in ALERT_OF]
-    A0 = 31
+    A0 = TOTAL + 3
     put(ws, f'M{A0}', '⚠ アラート（提出前に確認）', bold=True, color=C_RED, fill=FILL_RED)
     for c in 'NOPQ':
         put(ws, f'{c}{A0}', None, fill=FILL_RED)
@@ -613,7 +654,7 @@ def build_cover(ws, job, det, wf):
         put(ws, f'O{rr}', f'=IF(K{SUB}=0,"",1-N{rr}/K{SUB})', h='right', fmt='0.0%')
     grid(ws, f'M{T0}:O{T0 + 5}', outer='thin', vert='thin', horiz='thin')
     page_setup(ws, f'A1:L{last_note}', fit_h=1)
-    return dict(sub=SUB, disc=DISC, total=TOTAL, cost_cell='$O$27')
+    return dict(sub=SUB, disc=DISC, total=TOTAL, cost_cell=f'$O${DISC}')
 
 
 # =====================================================================
@@ -659,7 +700,7 @@ def build_conditions(ws, job, det):
         item = ln['name'] + (' ' + ln['spec'] if ln.get('spec') else '')
         qtxt = f"{ln['qty']:,} {ln['unit']}（{'想定' if ln['basis'] == '推測' else '実測＋想定'}）"
         put(ws, f'A{r}', k, size=10, h='center')
-        put(ws, f'B{r}', '２' if ln['_sec'] == 'AC' else '３', size=10, h='center')
+        put(ws, f'B{r}', {s['key']: s['no'] for s in det['secs']}[ln['_sec']], size=10, h='center')
         put(ws, f'C{r}', item, size=10, wrap=True, indent=1)
         merge(ws, f'D{r}:E{r}')
         put(ws, f'D{r}', ln['qmemo'], size=10, wrap=True, indent=1)
@@ -696,7 +737,7 @@ def build_sources(ws, job, det):
         if ln['kind'] not in ('item', 'tbd'):
             continue
         dr = ln['_row']
-        put(ws, f'A{r}', '空調設備工事' if ln['_sec'] == 'AC' else '配管設備工事', size=10)
+        put(ws, f'A{r}', {s['key']: s['title'] for s in det['secs']}[ln['_sec']], size=10)
         put(ws, f'B{r}', ln['name'], size=10)
         put(ws, f'C{r}', ln.get('spec') or None, size=9, shrink=True)
         put(ws, f'D{r}', f"={q(SH_DETAIL)}!E{dr}", size=10, h='right', fmt='#,##0.##')
@@ -716,7 +757,7 @@ def build_sources(ws, job, det):
               '配管工費＝国交省 公共建築工事標準単価積算基準 R8 の歩掛×33,750円/人。電線材料施工費＝0.017人/m×33,600円/人',
               '部門内経費: 空調 3%→4%→8%、配管 3%→5%→10% を順に積上げ（100円未満切上げ）、計を1,000円未満切上げ',
               '工事諸経費＝（空調＋配管）×5%。提出額は出精値引で調整。法定福利費は工事費に内含して表示',
-              '当社単価＝原価（材料＋人工×労務原価日額）×1.25 を100円単位で切上げ']:
+              '当社単価＝原価（材料＋人工×労務原価日額）×1.25 を100円単位で切上げ'] + list(getattr(job, 'SRC_RULE_NOTES', [])):
         r += 1
         put(ws, f'A{r}', '・' + t, size=9)
     page_setup(ws, f'A1:J{r}', fit_h=0)
@@ -817,8 +858,9 @@ def build_book(job, out_dir):
     ws_bs = wb.create_sheet(SH_BASIS)
     ws_cost = wb.create_sheet(SH_COST)
     det = build_detail(ws_det, job)
-    wf = build_welfare(ws_wf, job, det)
-    cv = build_cover(ws_cover, job, det, wf)
+    cl = cover_rows(job, det['secs'])
+    wf = build_welfare(ws_wf, job, det, cl)
+    cv = build_cover(ws_cover, job, det, wf, cl)
     cd = build_conditions(ws_cd, job, det)
     build_sources(ws_src, job, det)
     build_master(ws_mst)
@@ -841,7 +883,8 @@ def build_book(job, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, job.FILE)
     wb.save(out)
-    return dict(out=out, detail=dict(sec=det['sec'], oh=det['oh'], gt=det['gt']), conditions=cd)
+    return dict(out=out, detail=dict(sec=det['sec'], oh=det['oh'], gt=det['gt']), conditions=cd,
+                cover=dict(cl, rows=[(k, s['key'] if s else None) for k, s in cl['rows']]))
 
 
 # =====================================================================
@@ -888,18 +931,23 @@ def simulate(job, include_tbd=R.INCLUDE_TBD, labor_cost=R.LABOR_COST, mat_ratio=
             H[ln['key']], C[ln['key']], QTY[ln['key']] = h, c, ln.get('qty', 1)
             base += h
             cost += c
-        rates = [rt for _, rt in R.EST_EXP[sec['key']]]
-        e1 = _ru(base * rates[0], -2)
-        e2 = _ru((base + e1) * rates[1], -2)
-        s3 = base + e1 + e2
-        total = _ru(s3 + _ru(s3 * rates[2], -2), -3)
-        tot[sec['key']] = dict(base=base, exp=(e1, e2, total - s3), total=total, cost=cost)
+        if any(ln['kind'] == 'exp' for ln in sec['lines']):
+            rates = [rt for _, rt in R.EST_EXP[sec.get('exp_key', sec['key'])]]
+            e1 = _ru(base * rates[0], -2)
+            e2 = _ru((base + e1) * rates[1], -2)
+            s3 = base + e1 + e2
+            total = _ru(s3 + _ru(s3 * rates[2], -2), -3)
+            exp = (e1, e2, total - s3)
+        else:
+            total, exp = base, (0, 0, 0)
+        tot[sec['key']] = dict(base=base, exp=exp, total=total, cost=cost, oh=sec.get('oh', True))
         cost_all += cost
-    oh = _ru((tot['AC']['total'] + tot['PIPE']['total']) * R.EST_OVERHEAD, -2)
-    sub = tot['AC']['total'] + tot['PIPE']['total'] + oh
+    oh = _ru(sum(t['total'] for t in tot.values() if t['oh']) * R.EST_OVERHEAD, -2)
+    sub = sum(t['total'] for t in tot.values()) + oh
     cost_total = cost_all + round(labor_all * sum(r for _, r, _ in R.WELFARE_RATES))
     submit = math.ceil(cost_total / (1 - target_margin) / R.ROUND_UNIT - 1e-9) * R.ROUND_UNIT
     disc = submit - sub if submit < sub else 0
     final = sub + disc
-    return dict(ac=tot['AC']['total'], pipe=tot['PIPE']['total'], oh=oh, sub=sub, disc=disc, final=final,
+    return dict(**{k.lower(): t['total'] for k, t in tot.items()}, secs={k: t['total'] for k, t in tot.items()},
+                oh=oh, sub=sub, disc=disc, final=final,
                 cost=cost_total, md=md_all, margin=(final - cost_total) / final if final else 0)
